@@ -1,11 +1,11 @@
-"""统计学模块 - 信效度相关的统计工具"""
+"""心理测量学模块 - 信效度与答题倾向相关工具"""
 
-from wjx.core.stats.psychometric import (
+from wjx.core.psychometrics.psychometric import (
     build_psychometric_plan,
     PsychometricPlan,
     PsychometricItem,
 )
-from wjx.core.stats.utils import (
+from wjx.core.psychometrics.utils import (
     randn,
     normal_inv,
     z_to_category,

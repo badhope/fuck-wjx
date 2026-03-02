@@ -38,6 +38,7 @@ wjx/
 │   │   └── types/         # 各题型实现（single/multiple/dropdown/matrix/scale/score/slider/text/reorder）
 │   ├── captcha/           # 验证码处理（control/handler）
 │   ├── ai/                # AI 运行时（runtime.py）
+│   ├── psychometrics/     # 心理测量学工具（psychometric/utils）
 │   ├── persona/           # 画像与上下文约束（generator/context）
 │   └── services/          # 核心服务层（area_service/proxy_service/survey_service）
 ├── ui/                    # 界面层

@@ -9,7 +9,7 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from wjx.core.stats.utils import randn, z_to_category
+from wjx.core.psychometrics.utils import randn, z_to_category
 
 logger = logging.getLogger(__name__)
 
