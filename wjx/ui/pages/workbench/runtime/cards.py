@@ -116,7 +116,7 @@ class RandomIPSettingCard(ExpandGroupSettingCard):
         api_layout = QHBoxLayout(self.customApiRow)
         api_layout.setContentsMargins(0, 0, 0, 0)
         api_label = BodyLabel("API 地址", self.customApiRow)
-        api_hint = BodyLabel("*仅支持json返回格式", self.customApiRow)
+        api_hint = BodyLabel("*不计费。仅支持json返回格式", self.customApiRow)
         api_hint.setStyleSheet("color: red; font-size: 11px;")
         self.customApiEdit = LineEdit(self.customApiRow)
         self.customApiEdit.setPlaceholderText("请输入代理api地址")
@@ -397,13 +397,13 @@ class RandomIPSettingCard(ExpandGroupSettingCard):
         self.proxyCombo.setEnabled(True)
         self.customApiRow.setEnabled(True)
         # 清除容器级别的透明度，避免代理源行也变灰
-        self._groupContainer.setGraphicsEffect(None)
+        self._groupContainer.setGraphicsEffect(None)  # type: ignore[arg-type]
         # 只对地区行加半透明效果（指定地区在开关关闭时无意义）
         eff = self.areaRow.graphicsEffect()
         if eff is None:
             eff = QGraphicsOpacityEffect(self.areaRow)
             self.areaRow.setGraphicsEffect(eff)
-        eff.setOpacity(1.0 if enabled else 0.4)
+        eff.setOpacity(1.0 if enabled else 0.4)  # type: ignore[union-attr]
 
 
 class TimedModeSettingCard(SettingCard):
@@ -492,7 +492,7 @@ class RandomUASettingCard(ExpandGroupSettingCard):
         if effect is None:
             effect = QGraphicsOpacityEffect(self._groupContainer)
             self._groupContainer.setGraphicsEffect(effect)
-        effect.setOpacity(1.0 if enabled else 0.4)
+        effect.setOpacity(1.0 if enabled else 0.4)  # type: ignore[union-attr]
 
     def getRatios(self) -> dict:
         """获取当前设备占比配置"""

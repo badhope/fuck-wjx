@@ -6,11 +6,10 @@ import re
 import threading
 import time
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
-from typing import Any, Callable, List, Optional, Set, Tuple
+from typing import Any, List, Optional, Set, Tuple
 
 import wjx.network.http_client as http_client
 from wjx.utils.app.config import (
-    CARD_VALIDATION_ENDPOINT,
     DEFAULT_HTTP_HEADERS,
     PIKACHU_PROXY_API,
     PROXY_HEALTH_CHECK_TIMEOUT,
@@ -21,33 +20,19 @@ from wjx.utils.app.config import (
 )
 from wjx.utils.logging.log_utils import (
     log_suppressed_exception,
-    log_popup_confirm,
     log_popup_error,
-    log_popup_info,
-    log_popup_warning,
 )
-from wjx.utils.system.registry_manager import RegistryManager
-
-_CARD_VERIFY_TIMEOUT = 8  # seconds
 
 STATUS_TIMEOUT_SECONDS = 5
-_quota_limit_dialog_shown = False
-_cached_default_quota: Optional[int] = None  # 缓存从API获取的默认额度
-_cached_default_quota_timestamp: float = 0.0  # 缓存时间戳
-_DEFAULT_QUOTA_CACHE_TTL = 1800  # 缓存有效期
-_DEFAULT_QUOTA_API_ENDPOINT = "https://api-wjx.hungrym0.top/api/default"  # 默认额度API端点
 _proxy_api_url_override: Optional[str] = None
 _proxy_area_code_override: Optional[str] = None
-_quota_update_lock = threading.Lock()  # 用于保护后台更新
-_quota_updating = False  # 标记是否正在后台更新
-# 代理源常量
-PROXY_SOURCE_DEFAULT = "default"  # 默认代理源
-PROXY_SOURCE_PIKACHU = "pikachu"  # 皮卡丘代理站
-PROXY_SOURCE_CUSTOM = "custom"  # 自定义代理源
 
-# 当前选择的代理源
+# 代理源常量
+PROXY_SOURCE_DEFAULT = "default"
+PROXY_SOURCE_PIKACHU = "pikachu"
+PROXY_SOURCE_CUSTOM = "custom"
+
 _current_proxy_source: str = PROXY_SOURCE_DEFAULT
-# 匹配 IPv4:端口，支持可选的协议头和 user:pass@ 认证前缀
 _IP_PORT_RE = re.compile(
     r'(?:https?://)?'
     r'(?:([^\s:@/,]+):([^\s:@/,]+)@)?'
@@ -58,47 +43,25 @@ _IPZAN_MINUTE_OPTIONS: Tuple[int, ...] = (1, 3, 5, 10, 15, 30)
 _proxy_occupy_minute: int = 1
 _IPZAN_POOL_ORDINARY = "ordinary"
 _IPZAN_POOL_QUALITY = "quality"
-# 历史已支持的“省级随机”编码，继续走 ordinary
 _IPZAN_ORDINARY_PROVINCE_CODES: Set[str] = {
-    "110000",
-    "120000",
-    "130000",
-    "140000",
-    "150000",
-    "210000",
-    "220000",
-    "230000",
-    "320000",
-    "330000",
-    "340000",
-    "350000",
-    "360000",
-    "370000",
-    "410000",
-    "420000",
-    "430000",
-    "440000",
-    "460000",
-    "500000",
-    "510000",
-    "610000",
-    "620000",
-    "640000",
+    "110000", "120000", "130000", "140000", "150000", "210000", "220000",
+    "230000", "320000", "330000", "340000", "350000", "360000", "370000",
+    "410000", "420000", "430000", "440000", "460000", "500000", "510000",
+    "610000", "620000", "640000",
 }
 
 
 class AreaProxyQualityError(RuntimeError):
     """地区代理质量差导致无法使用时抛出。"""
 
+
 def set_proxy_source(source: str) -> None:
-    """设置代理源"""
     global _current_proxy_source
     _current_proxy_source = source
     logging.debug(f"代理源已切换为: {source}")
 
 
 def get_proxy_source() -> str:
-    """获取当前代理源"""
     return _current_proxy_source
 
 
@@ -111,7 +74,6 @@ def _to_non_negative_int(value: Any, default: int = 0) -> int:
 
 
 def _map_answer_seconds_to_ipzan_minute(total_seconds: int) -> int:
-    """将作答时长（秒）映射为 ipzan minute 参数。"""
     seconds = max(0, int(total_seconds))
     if seconds < 60:
         return 1
@@ -127,221 +89,53 @@ def _map_answer_seconds_to_ipzan_minute(total_seconds: int) -> int:
 
 
 def set_proxy_occupy_minute_by_answer_duration(answer_duration_range_seconds: Optional[Tuple[int, int]]) -> int:
-    """根据作答时长区间更新 ipzan 的 minute 参数。"""
     global _proxy_occupy_minute
-
-    min_seconds = 0
-    max_seconds = 0
+    min_seconds = max_seconds = 0
     if isinstance(answer_duration_range_seconds, (list, tuple)):
         if len(answer_duration_range_seconds) >= 1:
             min_seconds = _to_non_negative_int(answer_duration_range_seconds[0], 0)
-        if len(answer_duration_range_seconds) >= 2:
-            max_seconds = _to_non_negative_int(answer_duration_range_seconds[1], min_seconds)
-        else:
-            max_seconds = min_seconds
+        max_seconds = _to_non_negative_int(answer_duration_range_seconds[1], min_seconds) if len(answer_duration_range_seconds) >= 2 else min_seconds
     max_seconds = max(max_seconds, min_seconds)
-
     minute = _map_answer_seconds_to_ipzan_minute(max_seconds)
     if minute not in _IPZAN_MINUTE_OPTIONS:
         minute = 1
     _proxy_occupy_minute = minute
-    logging.debug(
-        "已根据作答时长更新代理 minute=%s（min=%s秒, max=%s秒）",
-        minute,
-        min_seconds,
-        max_seconds,
-    )
+    logging.debug("已根据作答时长更新代理 minute=%s（min=%s秒, max=%s秒）", minute, min_seconds, max_seconds)
     return minute
 
 
 def _fetch_cn_http_proxies_from_pikachu() -> List[str]:
-    """从皮卡丘代理站获取中国大陆 HTTP 代理"""
     try:
         resp = http_client.get(PIKACHU_PROXY_API, timeout=15, headers=DEFAULT_HTTP_HEADERS, proxies={})
         resp.raise_for_status()
         data = resp.json()
     except Exception as exc:
-        logging.error(f"从皮卡丘代理站获取代理失败: {exc}")
         raise RuntimeError(f"获取皮卡丘代理失败: {exc}")
-    
-    cn_http_proxies: List[str] = []
-    
-    # 增强解析：支持多种格式
+
     proxy_data = data.get("data", [])
     if isinstance(proxy_data, dict):
-        # 如果 data 是 dict，尝试获取 list 字段
         proxy_data = proxy_data.get("list", [])
     if not isinstance(proxy_data, list):
         proxy_data = []
-    
+
+    cn_http_proxies: List[str] = []
     for proxy in proxy_data:
         if not isinstance(proxy, dict):
             continue
-        # 筛选：国家是 CN 且协议包含 Http
-        country = proxy.get("country", "")
-        protocol = proxy.get("protocol", "")
-        
-        if country == "CN" and "http" in protocol.lower():
+        if proxy.get("country") == "CN" and "http" in str(proxy.get("protocol", "")).lower():
             ip = proxy.get("ip", "")
             port = proxy.get("port", "")
             if ip and port:
-                # 处理认证信息
                 username = str(proxy.get("account") or proxy.get("username") or "").strip()
                 password = str(proxy.get("password") or proxy.get("pwd") or "").strip()
-                if username and password:
-                    addr = f"http://{username}:{password}@{ip}:{port}"
-                else:
-                    addr = f"http://{ip}:{port}"
+                addr = f"http://{username}:{password}@{ip}:{port}" if username and password else f"http://{ip}:{port}"
                 cn_http_proxies.append(addr)
-    
+
     if not cn_http_proxies:
         logging.warning("皮卡丘代理站未找到中国大陆 HTTP 代理")
     else:
         logging.info(f"从皮卡丘代理站获取到 {len(cn_http_proxies)} 个中国大陆 HTTP 代理")
-    
     return cn_http_proxies
-
-
-def _fetch_default_quota_from_api() -> Optional[int]:
-    """从API获取默认随机IP额度
-
-    Returns:
-        成功返回额度数字，失败返回 None
-    """
-    try:
-        response = http_client.get(
-            _DEFAULT_QUOTA_API_ENDPOINT,
-            timeout=5,
-            headers=DEFAULT_HTTP_HEADERS,
-            proxies={}
-        )
-        response.raise_for_status()
-        data = response.json()
-
-        if not isinstance(data, dict):
-            logging.warning(f"默认额度API返回格式异常: {data}")
-            return None
-
-        quota = data.get("quota")
-        if quota is None:
-            logging.warning(f"默认额度API响应中缺少quota字段: {data}")
-            return None
-
-        quota_int = int(quota)
-        if quota_int <= 0:
-            logging.warning(f"默认额度API返回的quota值无效: {quota_int}")
-            return None
-
-        logging.debug(f"Fetched default quota from API: {quota_int}")
-        return quota_int
-
-    except http_client.exceptions.Timeout:
-        logging.debug("获取默认额度API超时")
-        return None
-    except http_client.exceptions.RequestException as exc:
-        logging.debug(f"获取默认额度API请求失败: {exc}")
-        return None
-    except (ValueError, TypeError) as exc:
-        logging.warning(f"解析默认额度API响应失败: {exc}")
-        return None
-    except Exception as exc:
-        log_suppressed_exception("random_ip._fetch_default_quota_from_api", exc)
-        return None
-
-
-def _get_default_quota_with_cache() -> Optional[int]:
-    """获取默认额度（带缓存机制）
-
-    优先使用缓存，缓存过期或不存在时从API获取，API失败则使用硬编码兜底值
-
-    Returns:
-        默认随机IP额度；当 API 不可用时返回 None
-    """
-    global _cached_default_quota, _cached_default_quota_timestamp
-
-    current_time = time.time()
-
-    # 检查缓存是否有效
-    if _cached_default_quota is not None:
-        cache_age = current_time - _cached_default_quota_timestamp
-        if cache_age < _DEFAULT_QUOTA_CACHE_TTL:
-            logging.debug(f"使用缓存的默认额度: {_cached_default_quota} (缓存剩余 {int(_DEFAULT_QUOTA_CACHE_TTL - cache_age)}秒)")
-            # 如果缓存快过期（剩余不到5分钟），启动后台更新
-            if cache_age > _DEFAULT_QUOTA_CACHE_TTL - 300:
-                _update_quota_cache_async()
-            return _cached_default_quota
-
-    # 缓存过期或不存在，尝试从API获取
-    api_quota = _fetch_default_quota_from_api()
-    if api_quota is not None:
-        _cached_default_quota = api_quota
-        _cached_default_quota_timestamp = current_time
-        return api_quota
-
-    logging.warning("API获取默认额度失败，随机IP额度保持未初始化状态")
-    return None
-
-
-def _update_quota_cache_async() -> None:
-    """后台异步更新额度缓存"""
-    global _quota_updating
-
-    with _quota_update_lock:
-        if _quota_updating:
-            return  # 已经有线程在更新，避免重复
-        _quota_updating = True
-
-    def _do_update():
-        global _cached_default_quota, _cached_default_quota_timestamp, _quota_updating
-        try:
-            api_quota = _fetch_default_quota_from_api()
-            if api_quota is not None:
-                with _quota_update_lock:
-                    _cached_default_quota = api_quota
-                    _cached_default_quota_timestamp = time.time()
-                    logging.debug(f"后台更新默认额度成功: {api_quota}")
-        except Exception as exc:
-            log_suppressed_exception("_update_quota_cache_async", exc)
-        finally:
-            with _quota_update_lock:
-                _quota_updating = False
-
-    thread = threading.Thread(target=_do_update, daemon=True, name="QuotaUpdateThread")
-    thread.start()
-
-
-def get_random_ip_limit() -> int:
-    """Read quota from registry with sane defaults."""
-    try:
-        # 优先读取本地额度，避免每次启动都触发网络请求
-        limit = RegistryManager.read_quota_limit(0)  # type: ignore[attr-defined]
-        limit = int(limit)
-        if limit > 0:
-            return limit
-    except Exception as exc:
-        log_suppressed_exception("random_ip.get_random_ip_limit", exc)
-
-    # 本地没有额度时，才回退到动态默认值（可能触发 API）
-    default_quota = _get_default_quota_with_cache()
-    if default_quota is None:
-        logging.warning("本地随机IP额度不存在且默认额度API不可用，随机IP功能将不可用")
-        return 0
-    try:
-        # 持久化默认额度，后续启动可直接走本地值
-        RegistryManager.write_quota_limit(default_quota)
-    except Exception as exc:
-        log_suppressed_exception("random_ip.get_random_ip_limit write default quota", exc)
-    return default_quota
-
-
-def get_random_ip_counter_snapshot_local() -> tuple[int, int, bool]:
-    """快速返回本地随机 IP 计数与额度（不触发网络请求）。"""
-    count = RegistryManager.read_submit_count()
-    limit = int(RegistryManager.read_quota_limit(0))
-    if limit < 0:
-        limit = 0
-    custom_api = is_custom_proxy_api_active()
-    return count, limit, custom_api
 
 
 def _validate_proxy_api_url(api_url: Optional[str]) -> str:
@@ -351,8 +145,7 @@ def _validate_proxy_api_url(api_url: Optional[str]) -> str:
         cleaned = ""
     if not cleaned:
         return ""
-    lowered = cleaned.lower()
-    if not (lowered.startswith("http://") or lowered.startswith("https://")):
+    if not (cleaned.lower().startswith("http://") or cleaned.lower().startswith("https://")):
         raise ValueError("随机IP提取接口必须以 http:// 或 https:// 开头")
     return cleaned
 
@@ -362,9 +155,7 @@ def _normalize_area_code(area_code: Optional[str]) -> str:
         cleaned = str(area_code or "").strip()
     except Exception:
         cleaned = ""
-    if not cleaned:
-        return ""
-    if not cleaned.isdigit() or len(cleaned) != 6:
+    if not cleaned or not cleaned.isdigit() or len(cleaned) != 6:
         return ""
     return cleaned
 
@@ -372,16 +163,12 @@ def _normalize_area_code(area_code: Optional[str]) -> str:
 def _is_area_quality_retry_payload(payload: Any) -> bool:
     if not isinstance(payload, dict):
         return False
-    code = payload.get("code")
-    status = payload.get("status")
-    message = str(payload.get("message") or "").strip()
-    if str(code) != "-1":
-        return False
-    if str(status) != "200":
-        return False
-    if message != "请重试":
-        return False
-    return payload.get("data") is None
+    return (
+        str(payload.get("code")) == "-1"
+        and str(payload.get("status")) == "200"
+        and str(payload.get("message") or "").strip() == "请重试"
+        and payload.get("data") is None
+    )
 
 
 def _handle_area_quality_failure(stop_signal: Optional[threading.Event] = None) -> None:
@@ -410,8 +197,7 @@ def _apply_area_to_proxy_url(url: str, area_code: Optional[str]) -> str:
                 insert_at = idx + 1
                 break
         query_items.insert(insert_at, ("area", normalized_area))
-    query = urlencode(query_items, doseq=True)
-    return urlunsplit((split.scheme, split.netloc, split.path, query, split.fragment))
+    return urlunsplit((split.scheme, split.netloc, split.path, urlencode(query_items, doseq=True), split.fragment))
 
 
 def _is_province_level_area_code(area_code: str) -> bool:
@@ -421,7 +207,6 @@ def _is_province_level_area_code(area_code: str) -> bool:
 def _resolve_ipzan_pool_by_area(area_code: Optional[str]) -> Optional[str]:
     normalized_area = _normalize_area_code(area_code)
     if not normalized_area:
-        # 不限地区时保持默认 URL 的 pool，不做覆盖
         return None
     if _is_province_level_area_code(normalized_area) and normalized_area in _IPZAN_ORDINARY_PROVINCE_CODES:
         return _IPZAN_POOL_ORDINARY
@@ -433,9 +218,7 @@ def _is_ipzan_core_extract_url(url: str) -> bool:
         split = urlsplit(url)
     except Exception:
         return False
-    host = str(split.netloc or "").lower()
-    path = str(split.path or "").lower()
-    return host.endswith("ipzan.com") and "core-extract" in path
+    return str(split.netloc or "").lower().endswith("ipzan.com") and "core-extract" in str(split.path or "").lower()
 
 
 def _apply_minute_to_proxy_url(url: str, minute: int) -> str:
@@ -445,15 +228,10 @@ def _apply_minute_to_proxy_url(url: str, minute: int) -> str:
         split = urlsplit(url)
     except Exception:
         return url
-
-    safe_minute = int(minute)
-    if safe_minute not in _IPZAN_MINUTE_OPTIONS:
-        safe_minute = 1
-
+    safe_minute = int(minute) if int(minute) in _IPZAN_MINUTE_OPTIONS else 1
     query_items = [(k, v) for k, v in parse_qsl(split.query, keep_blank_values=True) if k.lower() != "minute"]
     query_items.append(("minute", str(safe_minute)))
-    query = urlencode(query_items, doseq=True)
-    return urlunsplit((split.scheme, split.netloc, split.path, query, split.fragment))
+    return urlunsplit((split.scheme, split.netloc, split.path, urlencode(query_items, doseq=True), split.fragment))
 
 
 def _apply_pool_to_proxy_url(url: str, pool: Optional[str]) -> str:
@@ -463,11 +241,9 @@ def _apply_pool_to_proxy_url(url: str, pool: Optional[str]) -> str:
         split = urlsplit(url)
     except Exception:
         return url
-
     query_items = [(k, v) for k, v in parse_qsl(split.query, keep_blank_values=True) if k.lower() != "pool"]
     query_items.append(("pool", pool))
-    query = urlencode(query_items, doseq=True)
-    return urlunsplit((split.scheme, split.netloc, split.path, query, split.fragment))
+    return urlunsplit((split.scheme, split.netloc, split.path, urlencode(query_items, doseq=True), split.fragment))
 
 
 def get_default_proxy_area_code() -> str:
@@ -496,7 +272,6 @@ def get_effective_proxy_api_url() -> str:
 
 
 def is_custom_proxy_api_active() -> bool:
-    """判断当前是否使用非默认代理源（不受 ipzan 额度限制）。"""
     if _current_proxy_source != PROXY_SOURCE_DEFAULT:
         return True
     return bool((_proxy_api_url_override or "").strip())
@@ -523,31 +298,21 @@ def set_proxy_api_override(api_url: Optional[str]) -> str:
 
 
 def get_status() -> Any:
-    """Fetch developer status endpoint."""
     response = http_client.get(STATUS_ENDPOINT, timeout=STATUS_TIMEOUT_SECONDS, headers=DEFAULT_HTTP_HEADERS, proxies={})
     response.raise_for_status()
     return response.json()
 
 
 def _format_status_payload(payload: Any) -> tuple[str, str]:
-    """Format online status payload into (text, color)."""
     if not isinstance(payload, dict):
         return "未知：返回数据格式异常", "#666666"
     online = payload.get("online", None)
     message = str(payload.get("message") or "").strip()
     if not message:
-        if online is True:
-            message = "系统正常运行中"
-        elif online is False:
-            message = "系统当前不在线"
-        else:
-            message = "状态未知"
+        message = "系统正常运行中" if online is True else ("系统当前不在线" if online is False else "状态未知")
     color = "#228B22" if online is True else ("#cc0000" if online is False else "#666666")
-    if online is True:
-        return f"在线：{message}", color
-    if online is False:
-        return f"离线：{message}", color
-    return f"未知：{message}", color
+    prefix = "在线" if online is True else ("离线" if online is False else "未知")
+    return f"{prefix}：{message}", color
 
 
 def _proxy_api_candidates(expected_count: int, proxy_url: Optional[str]) -> List[str]:
@@ -560,38 +325,29 @@ def _proxy_api_candidates(expected_count: int, proxy_url: Optional[str]) -> List
         return [url.format(num=max(1, expected_count))]
     if "num=" in url.lower() or "count=" in url.lower():
         return [url]
-    # 兜底：尝试附加 num 参数
     separator = "&" if "?" in url else "?"
     return [f"{url}{separator}num={max(1, expected_count)}", url]
 
 
 def _extract_proxy_from_string(s: str) -> Optional[str]:
-    """从字符串中提取代理地址，用正则直接识别 IP:端口，不依赖格式约定"""
     if not isinstance(s, str):
         return None
     m = _IP_PORT_RE.search(s.strip())
     if not m:
         return None
     user, pwd, ip, port = m.group(1), m.group(2), m.group(3), m.group(4)
-    if user and pwd:
-        return f"{user}:{pwd}@{ip}:{port}"
-    return f"{ip}:{port}"
+    return f"{user}:{pwd}@{ip}:{port}" if user and pwd else f"{ip}:{port}"
 
 
 def _extract_proxy_from_dict(obj: dict) -> Optional[str]:
-    """从字典对象中提取代理地址"""
     if not isinstance(obj, dict):
         return None
-    # 快速路径：尝试 ip + port 字段组合
     ip = str(obj.get("ip") or obj.get("IP") or obj.get("host") or "").strip()
     port = str(obj.get("port") or obj.get("Port") or obj.get("PORT") or "").strip()
     if ip and port:
         username = str(obj.get("account") or obj.get("username") or obj.get("user") or "").strip()
         password = str(obj.get("password") or obj.get("pwd") or obj.get("pass") or "").strip()
-        if username and password:
-            return f"{username}:{password}@{ip}:{port}"
-        return f"{ip}:{port}"
-    # 兜底：扫描所有字符串值，用正则识别 IP:端口（兼容 addr/proxy 等非标准字段名）
+        return f"{username}:{password}@{ip}:{port}" if username and password else f"{ip}:{port}"
     for v in obj.values():
         if isinstance(v, str):
             proxy = _extract_proxy_from_string(v)
@@ -601,17 +357,13 @@ def _extract_proxy_from_dict(obj: dict) -> Optional[str]:
 
 
 def _recursive_find_proxies(data: Any, results: List[str], depth: int = 0) -> None:
-    """递归遍历JSON结构，自动识别并提取代理地址"""
-    if depth > 10:  # 防止无限递归
+    if depth > 10:
         return
-    
     if isinstance(data, dict):
-        # 尝试从当前字典提取代理
         proxy = _extract_proxy_from_dict(data)
         if proxy:
             results.append(proxy)
-            return  # 找到代理后不再深入该对象
-        # 递归遍历所有值
+            return
         for value in data.values():
             _recursive_find_proxies(value, results, depth + 1)
     elif isinstance(data, list):
@@ -629,19 +381,14 @@ def _recursive_find_proxies(data: Any, results: List[str], depth: int = 0) -> No
 
 
 def _parse_proxy_payload(text: str) -> List[str]:
-    """智能解析代理API返回的JSON数据，自动兼容各种格式"""
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
         raise ValueError(f"JSON解析失败: {e}")
-    
     candidates: List[str] = []
     _recursive_find_proxies(data, candidates)
-    
     if not candidates:
         raise ValueError("返回数据中无有效代理地址")
-    
-    # 去重并记录日志
     seen: Set[str] = set()
     unique: List[str] = []
     for addr in candidates:
@@ -649,26 +396,15 @@ def _parse_proxy_payload(text: str) -> List[str]:
             seen.add(addr)
             unique.append(addr)
             logging.info(f"获取到代理: {_mask_proxy_for_log(addr)}")
-    
     return unique
 
 
 def test_custom_proxy_api(url: str) -> tuple[bool, str, List[str]]:
-    """测试自定义代理API是否可用
-    
-    Args:
-        url: API地址
-        
-    Returns:
-        (是否成功, 错误信息, 解析到的代理列表)
-    """
     if not url or not url.strip():
         return False, "API地址不能为空", []
-    
     url = url.strip()
     if not (url.lower().startswith("http://") or url.lower().startswith("https://")):
         return False, "API地址必须以 http:// 或 https:// 开头", []
-    
     try:
         resp = http_client.get(url, timeout=10, headers=DEFAULT_HTTP_HEADERS, proxies={})
         resp.raise_for_status()
@@ -680,7 +416,6 @@ def test_custom_proxy_api(url: str) -> tuple[bool, str, List[str]]:
         return False, f"HTTP错误: {e.response.status_code}", []
     except Exception as e:
         return False, f"请求失败: {e}", []
-    
     try:
         proxies = _parse_proxy_payload(resp.text)
         if not proxies:
@@ -714,7 +449,6 @@ def _format_host_port(hostname: str, port: Optional[int]) -> str:
 
 
 def _mask_proxy_for_log(proxy_address: Optional[str]) -> str:
-    """仅在默认代理源下抹掉账号密码，保留 ip:端口。"""
     if not proxy_address:
         return ""
     text = str(proxy_address).strip()
@@ -739,56 +473,11 @@ def _mask_proxy_for_log(proxy_address: Optional[str]) -> str:
     return raw
 
 
-def _mask_card_code(code: str) -> str:
-    """避免日志泄露完整卡密，只保留首尾数位。"""
-    if not code:
-        return "***"
-    code = str(code).strip()
-    if len(code) <= 4:
-        return "***"
-    if len(code) <= 8:
-        return f"{code[:2]}***{code[-2:]}"
-    return f"{code[:3]}***{code[-3:]}"
-
-
-def _summarize_http_response(response: Any) -> str:
-    """提取关键信息用于日志，避免长篇输出。"""
-    try:
-        status = f"HTTP {getattr(response, 'status_code', '?')}"
-        reason = getattr(response, "reason", "") or ""
-        headers = getattr(response, "headers", {}) or {}
-        interesting_keys = ("cf-ray", "server", "content-type", "content-length", "date")
-        header_parts = []
-        for key in interesting_keys:
-            val = headers.get(key) or headers.get(key.title())
-            if val:
-                header_parts.append(f"{key}={val}")
-        header_text = "; ".join(header_parts) if header_parts else "no-key-headers"
-        body = ""
-        try:
-            body = (response.text or "").strip()
-        except Exception:
-            body = "<unreadable body>"
-        if body and len(body) > 300:
-            body = body[:300] + "...(truncated)"
-        return f"{status} {reason}; headers: {header_text}; body: {body or '<empty>'}"
-    except Exception as exc:  # pragma: no cover
-        return f"无法摘要响应: {exc}"
-
-
 def _proxy_is_responsive(proxy_address: str, skip_for_default: bool = True) -> bool:
-    """检测代理是否可用
-    
-    Args:
-        proxy_address: 代理地址
-        skip_for_default: 是否对默认代理源跳过检查（默认代理源是付费代理，无需检查）
-    """
     masked_proxy = _mask_proxy_for_log(proxy_address)
-    # 默认代理源是付费代理，直接信任，跳过健康检查
     if skip_for_default and get_proxy_source() == PROXY_SOURCE_DEFAULT:
         logging.debug(f"默认代理源，跳过健康检查: {masked_proxy}")
         return True
-    
     proxy_address = _normalize_proxy_address(proxy_address) or ""
     if not proxy_address:
         return False
@@ -808,7 +497,6 @@ def _proxy_is_responsive(proxy_address: str, skip_for_default: bool = True) -> b
 
 
 def _proxy_is_responsive_fast(proxy_address: str) -> bool:
-    """快速检测代理是否可用（3秒超时）"""
     proxy_address = _normalize_proxy_address(proxy_address) or ""
     if not proxy_address:
         return False
@@ -826,19 +514,14 @@ def _fetch_new_proxy_batch(
     notify_on_area_error: bool = True,
     stop_signal: Optional[threading.Event] = None,
 ) -> List[str]:
-    """Fetch a batch of proxy addresses."""
-    # 根据代理源选择不同的获取方式
     current_source = get_proxy_source()
-    # 如果配置了自定义API覆盖，视为自定义代理源
     is_custom = current_source == PROXY_SOURCE_CUSTOM or is_custom_proxy_api_active()
-    
+
     if current_source == PROXY_SOURCE_PIKACHU:
-        # 使用皮卡丘代理站
         try:
             all_proxies = _fetch_cn_http_proxies_from_pikachu()
             if not all_proxies:
                 raise RuntimeError("皮卡丘代理站未返回任何中国大陆 HTTP 代理")
-            # 打乱顺序后逐个检查可用性，最多验证10个
             random.shuffle(all_proxies)
             max_check = min(10, len(all_proxies))
             valid_proxies: List[str] = []
@@ -855,17 +538,14 @@ def _fetch_new_proxy_batch(
                 raise RuntimeError(f"已验证{max_check}个代理均不可用，请稍后重试或切换代理源")
             return valid_proxies
         except Exception as exc:
-            logging.error(f"从皮卡丘代理站获取代理失败: {exc}")
             raise RuntimeError(f"获取皮卡丘代理失败: {exc}")
-    
+
     if is_custom:
-        # 使用自定义代理API - 必须使用覆盖的URL，不能回退到默认
         if not is_custom_proxy_api_active():
             raise RuntimeError("自定义代理API地址未配置，请在设置中填写API地址")
         proxy_url = _proxy_api_url_override
         logging.info(f"使用自定义代理API: {proxy_url}")
-    
-    # 默认代理源或自定义代理源：使用原有逻辑
+
     candidates: List[str] = []
     errors: List[str] = []
     area_code = get_proxy_area_code()
@@ -907,309 +587,13 @@ def _fetch_new_proxy_batch(
     return normalized[: max(1, expected_count)]
 
 
-def _invoke_popup(gui: Any, kind: str, title: str, message: str) -> Any:
-    """Dispatch popup requests to the GUI if it exposes explicit hooks; otherwise fall back to global handlers."""
-    gui_handler = None
-    if gui is not None:
-        gui_handler = getattr(gui, f"_log_popup_{kind}", None)
-    if callable(gui_handler):
-        try:
-            return gui_handler(title, message)
-        except Exception:
-            logging.debug("GUI popup handler failed; falling back to global handler", exc_info=True)
-
-    popup_map = {
-        "info": log_popup_info,
-        "warning": log_popup_warning,
-        "error": log_popup_error,
-        "confirm": log_popup_confirm,
-    }
-    handler = popup_map.get(kind)
-    if handler:
-        return handler(title, message)
-    return None
-
-
-def _set_random_ip_enabled(gui: Any, enabled: bool):
-    if gui is None:
-        return
-    var = getattr(gui, "random_ip_enabled_var", None)
-    if var and hasattr(var, "set"):
-        try:
-            var.set(bool(enabled))
-        except Exception:
-            logging.debug("无法更新随机IP开关状态", exc_info=True)
-
-
-def _schedule_on_gui_thread(gui: Any, callback: Callable[[], None]):
-    if gui is None:
-        callback()
-        return
-    dispatcher = getattr(gui, "_post_to_ui_thread_async", None)
-    if callable(dispatcher):
-        try:
-            dispatcher(callback)
-            return
-        except Exception:
-            logging.debug("派发到 GUI 线程失败", exc_info=True)
-    dispatcher = getattr(gui, "_post_to_ui_thread", None)
-    if callable(dispatcher):
-        try:
-            thread = threading.Thread(target=dispatcher, args=(callback,), daemon=True)
-            thread.start()
-            return
-        except Exception:
-            logging.debug("派发到 GUI 线程失败", exc_info=True)
-    try:
-        callback()
-    except Exception:
-        logging.debug("执行回调失败", exc_info=True)
-
-
-def confirm_random_ip_usage(gui: Any) -> bool:
-    notice = (
-        "启用随机IP提交前请确认：\n\n"
-        "1) 代理来源于网络，确认启用视为已知悉风险并自愿承担后果；\n"
-        "2) 禁止用于污染他人问卷数据，否则可能被封禁或承担法律责任；\n"
-        "3) 随机IP维护成本高昂，如需大量使用需要付费。\n\n"
-        "是否继续启用随机IP提交？"
-    )
-    confirmed = bool(_invoke_popup(gui, "confirm", "随机IP使用声明", notice))
-    if confirmed and gui is not None:
-        setattr(gui, "_random_ip_disclaimer_ack", True)
-    return confirmed
-
-
-def on_random_ip_toggle(gui: Any):
-    if gui is None:
-        return
-    var = getattr(gui, "random_ip_enabled_var", None)
-    enabled = bool(var.get() if var and hasattr(var, "get") else False)
-    if not enabled:
-        return
-    if is_custom_proxy_api_active():
-        if confirm_random_ip_usage(gui):
-            return
-        _set_random_ip_enabled(gui, False)
-        return
-    count = RegistryManager.read_submit_count()
-    # 仅做开关即时检查：读取本地额度，避免在 GUI 线程触发同步网络请求
-    limit = int(RegistryManager.read_quota_limit(0) or 0)
-    if limit <= 0:
-        _invoke_popup(gui, "warning", "提示", "随机IP额度不可用（本地未初始化且默认额度API不可用）。")
-        _set_random_ip_enabled(gui, False)
-        return
-    if count >= limit:
-        _invoke_popup(gui, "warning", "提示", f"随机IP已达{limit}份限制，请验证卡密后再启用。")
-        _set_random_ip_enabled(gui, False)
-        return
-    if confirm_random_ip_usage(gui):
-        return
-    _set_random_ip_enabled(gui, False)
-
-
-def ensure_random_ip_ready(gui: Any) -> bool:
-    if getattr(gui, "_random_ip_disclaimer_ack", False):
-        return True
-    if confirm_random_ip_usage(gui):
-        return True
-    _set_random_ip_enabled(gui, False)
-    _invoke_popup(gui, "info", "已取消随机IP提交", "未同意免责声明，已禁用随机IP提交。")
-    return False
-
-
-def refresh_ip_counter_display(gui: Any):
-    """Notify GUI about current random IP counter."""
-    if gui is None:
-        return
-    def _compute_and_update():
-        limit = int(get_random_ip_limit() or 0)
-        count = RegistryManager.read_submit_count()
-        custom_api = is_custom_proxy_api_active()
-
-        def _apply():
-            handler = getattr(gui, "update_random_ip_counter", None)
-            if not callable(handler):
-                return
-            handler(count, limit, custom_api)
-            # 达到上限时自动关闭随机IP开关
-            if not custom_api and limit > 0 and count >= limit:
-                _set_random_ip_enabled(gui, False)
-
-        _schedule_on_gui_thread(gui, _apply)
-
-    # 若在主线程调用，避免阻塞 UI，改为后台计算后再回 UI 线程更新
-    if threading.current_thread() is threading.main_thread():
-        thread = threading.Thread(
-            target=_compute_and_update,
-            daemon=True,
-            name="IPCounterRefresh",
-        )
-        thread.start()
-    else:
-        _compute_and_update()
-
-
-def _validate_card(card_code: str) -> tuple[bool, Optional[int]]:
-    """调用远端接口验证卡密并返回额度（分钟/份）。
-
-    新API格式：
-    - 请求：POST /api/card/verify，Body: {"code": "卡密"}
-    - 成功响应：{"ok": true, "quota": N}  # quota字段指定增加的额度
-    - 失败响应：{"detail": "invalid_code"} 或 {"detail": "invalid request body"}
-    """
-    if not card_code:
-        logging.warning("卡密为空")
-        return False, None
-    if not CARD_VALIDATION_ENDPOINT:
-        logging.error("未配置 CARD_VALIDATION_ENDPOINT，无法验证卡密")
-        return False, None
-
-    code = card_code.strip()
-    masked = _mask_card_code(code)
-    payload = {"code": code}
-    headers = {"Content-Type": "application/json", **DEFAULT_HTTP_HEADERS}
-
-    try:
-        response = http_client.post(
-            CARD_VALIDATION_ENDPOINT,
-            json=payload,
-            headers=headers,
-            timeout=_CARD_VERIFY_TIMEOUT,
-            proxies={},
-        )
-    except Exception as exc:
-        logging.error(f"卡密验证请求失败: {exc}")
-        return False, None
-
-    # 解析响应
-    try:
-        data = response.json()
-    except Exception as exc:
-        logging.error(f"解析卡密验证响应失败: {exc} | {_summarize_http_response(response)}")
-        return False, None
-
-    # 检查响应格式
-    # 成功：{"ok": true, "quota": N}
-    if isinstance(data, dict) and data.get("ok") is True:
-        # quota 必须由服务端明确返回，不再使用本地硬编码兜底
-        quota_val = data.get("quota")
-        if quota_val is None:
-            logging.warning("卡密验证响应中缺少quota字段，拒绝本次解锁")
-            return False, None
-        else:
-            try:
-                quota_val = int(quota_val)
-                if quota_val <= 0:
-                    logging.warning(f"卡密验证响应中quota值无效: {quota_val}，拒绝本次解锁")
-                    return False, None
-            except (ValueError, TypeError):
-                logging.warning(f"卡密验证响应中quota值格式错误: {quota_val}，拒绝本次解锁")
-                return False, None
-
-        logging.info(f"卡密 {masked} 验证通过，额度+{quota_val}")
-        return True, quota_val
-
-    # 失败：{"detail": "invalid_code"} 或其他错误信息
-    detail = data.get("detail", "未知错误") if isinstance(data, dict) else "响应格式异常"
-    logging.warning(f"卡密验证失败：{detail} | {_summarize_http_response(response)}")
-    return False, None
-
-
-def show_card_validation_dialog(gui: Any = None) -> bool:
-    """Simplified card validation flow: ask user to输入卡密，验证通过后解除额度。"""
-    prompt = (
-        "随机IP额度已用尽。\n\n"
-        "如已获取卡密，请输入卡密以解锁大额额度；否则可选择取消并继续使用自定义代理接口。"
-    )
-    if not _invoke_popup(gui, "confirm", "随机IP额度", prompt):
-        return False
-    code_getter = getattr(gui, "request_card_code", None)
-    if callable(code_getter):
-        card_code = code_getter()
-    else:
-        # 无 GUI 交互时直接失败
-        log_popup_warning("需要卡密", "请在界面中输入卡密解锁随机IP额度")
-        return False
-    ok, quota = _validate_card(str(card_code) if card_code else "")
-    if ok:
-        if quota is None:
-            _invoke_popup(gui, "error", "验证失败", "卡密验证成功但缺少额度信息，请联系开发者。")
-            return False
-        quota_to_add = max(1, int(quota))
-        # 读取当前额度上限，在此基础上增加
-        current_limit = get_random_ip_limit()
-        new_limit = current_limit + quota_to_add
-        RegistryManager.write_quota_limit(new_limit)
-        # 标记为已验证过卡密
-        RegistryManager.set_card_verified(True)
-        _invoke_popup(gui, "info", "验证成功", f"卡密验证通过，已增加 {quota_to_add} 额度（当前总额度：{new_limit}）。")
-        return True
-    _invoke_popup(gui, "error", "验证失败", "卡密验证失败，请检查后重试。")
-    return False
-
-
-def _disable_random_ip_and_show_dialog(gui: Any):
-    global _quota_limit_dialog_shown
-
-    def _action():
-        global _quota_limit_dialog_shown
-        if _quota_limit_dialog_shown:
-            return
-        _quota_limit_dialog_shown = True
-        _set_random_ip_enabled(gui, False)
-        show_card_validation_dialog(gui)
-
-    _schedule_on_gui_thread(gui, _action)
-
-
-def handle_random_ip_submission(gui: Any, stop_signal: Optional[threading.Event]):
-    # 如果是自定义代理接口，不进行额度计数和限制
-    if is_custom_proxy_api_active():
-        return
-    limit = int(get_random_ip_limit() or 0)
-    if limit <= 0:
-        logging.warning("随机IP额度不可用（本地未初始化且默认额度API不可用），停止任务")
-        if stop_signal:
-            stop_signal.set()
-        _set_random_ip_enabled(gui, False)
-        return
-    # 先检查当前计数是否已达限制
-    current_count = RegistryManager.read_submit_count()
-    if current_count >= limit:
-        logging.warning(f"随机IP提交已达{limit}份限制，停止任务并弹出卡密验证窗口")
-        if stop_signal:
-            stop_signal.set()
-        _disable_random_ip_and_show_dialog(gui)
-        return
-    # 未达限制时才递增计数
-    ip_count = RegistryManager.increment_submit_count()
-    logging.info(f"随机IP提交计数: {ip_count}/{limit}")
-    try:
-        _schedule_on_gui_thread(gui, lambda: refresh_ip_counter_display(gui))
-    except Exception as exc:
-        log_suppressed_exception("random_ip.handle_random_ip_submission refresh counter", exc)
-    # 递增后再次检查是否达到限制
-    if ip_count >= limit:
-        logging.warning(f"随机IP提交已达{limit}份，停止任务并弹出卡密验证窗口")
-        if stop_signal:
-            stop_signal.set()
-        _disable_random_ip_and_show_dialog(gui)
-
-
-def normalize_random_ip_enabled_value(desired_enabled: bool) -> bool:
-    if not desired_enabled:
-        return False
-    # 如果是自定义代理接口，不受额度限制
-    if is_custom_proxy_api_active():
-        return True
-    limit = int(get_random_ip_limit() or 0)
-    if limit <= 0:
-        logging.warning("配置中启用了随机IP，但额度不可用（本地未初始化且默认额度API不可用），已禁用")
-        return False
-    count = RegistryManager.read_submit_count()
-    if count >= limit:
-        logging.warning(f"配置中启用了随机IP，但已达到{limit}份限制，已禁用此选项")
-        return False
-    return True
-
+# 向后兼容重新导出
+from .quota import get_random_ip_limit, get_random_ip_counter_snapshot_local, normalize_random_ip_enabled_value  # noqa: F401
+from .gui_bridge import (  # noqa: F401
+    confirm_random_ip_usage,
+    on_random_ip_toggle,
+    ensure_random_ip_ready,
+    refresh_ip_counter_display,
+    handle_random_ip_submission,
+    show_card_validation_dialog,
+)

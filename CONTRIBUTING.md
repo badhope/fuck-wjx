@@ -53,7 +53,7 @@ wjx/
 │   └── pages/             # 各页面（workbench/settings/more/community）
 │       ├── community.py   # 社区页（一级菜单）
 │       ├── settings/      # 设置页（settings.py）
-│       ├── more/          # 更多子页面（about/changelog/donate/support）
+│       ├── more/          # 更多子页面（about/changelog/donate/support/ip_usage）
 │       └── workbench/
 │           ├── dashboard.py
 │           ├── answer_rules.py   # 作答规则页（条件 -> 动作）
@@ -62,15 +62,20 @@ wjx/
 │           ├── question/         # 题目配置界面（page/add_dialog/add_preview/wizard_dialog/wizard_sections/psycho_config/constants/utils）
 │           └── runtime/          # 运行时界面（main/cards/ai/dialogs）
 ├── network/               # 网络相关
-│   ├── browser/driver.py  # 浏览器驱动封装
-│   ├── proxy/provider.py  # 随机 IP/代理逻辑
+│   ├── browser/
+│   │   └── driver.py      # 浏览器驱动封装
+│   ├── proxy/
+│   │   ├── provider.py    # 代理获取、URL构建、代理源管理
+│   │   ├── quota.py       # 额度管理（API缓存、注册表读写）
+│   │   ├── card.py        # 卡密验证（纯逻辑）
+│   │   └── gui_bridge.py  # GUI交互桥接（弹窗、线程派发、开关控制）
 │   ├── http_client.py     # 请求策略
 │   └── session_policy.py  # 会话策略
 ├── modes/                 # 运行模式控制（timed_mode/duration_control）
 ├── utils/                 # 通用工具
 │   ├── event_bus.py       # 全局事件总线
 │   ├── app/               # 应用配置与路径（config/runtime_paths/version）
-│   ├── io/                # 文件读写（load_save/markdown_utils/qrcode_utils）
+│   ├── io/                # 文件读写（load_save/markdown_utils/qrcode_utils/ip_usage_log）
 │   ├── integrations/      # 外部集成（ai_service）
 │   ├── system/            # 系统工具（cleanup_runner/registry_manager）
 │   ├── logging/           # 日志工具（log_utils）
