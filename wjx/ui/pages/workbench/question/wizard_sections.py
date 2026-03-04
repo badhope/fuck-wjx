@@ -288,6 +288,123 @@ class WizardSectionsMixin:
         self.text_container_map[idx] = rows_container
         self.text_add_btn_map[idx] = add_btn
 
+        # 填空项配置区域
+        from PySide6.QtWidgets import QRadioButton
+        config_hint = BodyLabel("填空项配置：", card)
+        config_hint.setStyleSheet("font-size: 12px; margin-top: 8px;")
+        _apply_label_color(config_hint, "#666666", "#bfbfbf")
+        card_layout.addWidget(config_hint)
+
+        # 存储每个填空项的单选按钮组和AI复选框
+        blank_radio_groups: List[QButtonGroup] = []
+        blank_mode_radios: List[Dict[str, QRadioButton]] = []
+        blank_ai_checkboxes: List[CheckBox] = []
+
+        # 解析现有配置
+        saved_modes = getattr(entry, "multi_text_blank_modes", None) or []
+        if not isinstance(saved_modes, list):
+            saved_modes = []
+        while len(saved_modes) < blank_count:
+            saved_modes.append(_TEXT_RANDOM_NONE)
+
+        saved_ai_flags = getattr(entry, "multi_text_blank_ai_flags", None) or []
+        if not isinstance(saved_ai_flags, list):
+            saved_ai_flags = []
+        while len(saved_ai_flags) < blank_count:
+            saved_ai_flags.append(False)
+
+        ai_master_on = getattr(self, "ai_master_enabled", True)
+
+        for blank_idx in range(blank_count):
+            blank_row = QHBoxLayout()
+            blank_row.setSpacing(8)
+            blank_label = BodyLabel(f"填空{blank_idx + 1}:", card)
+            blank_label.setFixedWidth(60)
+            blank_label.setStyleSheet("font-size: 12px;")
+            _apply_label_color(blank_label, "#666666", "#bfbfbf")
+            blank_row.addWidget(blank_label)
+
+            radio_group = QButtonGroup(card)
+            radio_group.setExclusive(True)
+
+            radio_list = QRadioButton("使用答案列表", card)
+            radio_name = QRadioButton("随机姓名", card)
+            radio_mobile = QRadioButton("随机手机号", card)
+
+            radio_group.addButton(radio_list, 0)
+            radio_group.addButton(radio_name, 1)
+            radio_group.addButton(radio_mobile, 2)
+
+            current_mode = saved_modes[blank_idx] if blank_idx < len(saved_modes) else _TEXT_RANDOM_NONE
+            if current_mode == _TEXT_RANDOM_NAME:
+                radio_name.setChecked(True)
+            elif current_mode == _TEXT_RANDOM_MOBILE:
+                radio_mobile.setChecked(True)
+            else:
+                radio_list.setChecked(True)
+
+            blank_row.addWidget(radio_list)
+            blank_row.addWidget(radio_name)
+            blank_row.addWidget(radio_mobile)
+
+            # 每个填空项的AI复选框
+            ai_cb = CheckBox("启用AI", card)
+            if not ai_master_on:
+                ai_cb.setEnabled(False)
+                ai_cb.setChecked(False)
+            else:
+                ai_cb.setChecked(saved_ai_flags[blank_idx] if blank_idx < len(saved_ai_flags) else False)
+            blank_row.addWidget(ai_cb)
+            blank_ai_checkboxes.append(ai_cb)
+
+            blank_row.addStretch(1)
+            card_layout.addLayout(blank_row)
+
+            blank_radio_groups.append(radio_group)
+            blank_mode_radios.append({
+                "list": radio_list,
+                "name": radio_name,
+                "mobile": radio_mobile
+            })
+
+            # 互斥逻辑：控制该列输入框的启用/禁用
+            def make_sync_func(col_idx, radios, ai_checkbox, edits_list):
+                def sync_column_state():
+                    mode_id = radios["list"].group().checkedId()
+                    ai_enabled = ai_checkbox.isChecked() if ai_master_on else False
+                    use_list = (mode_id == 0 and not ai_enabled)
+
+                    # 禁用/启用该列的所有输入框
+                    for row in edits_list:
+                        if col_idx < len(row):
+                            row[col_idx].setEnabled(use_list)
+
+                    # AI和随机模式互斥
+                    if ai_enabled:
+                        radios["name"].setEnabled(False)
+                        radios["mobile"].setEnabled(False)
+                        if not radios["list"].isChecked():
+                            radios["list"].setChecked(True)
+                    else:
+                        radios["name"].setEnabled(True)
+                        radios["mobile"].setEnabled(True)
+
+                return sync_column_state
+
+            sync_func = make_sync_func(blank_idx, blank_mode_radios[-1], ai_cb, row_edits)
+            radio_group.buttonClicked.connect(lambda checked=False, f=sync_func: f())
+            ai_cb.toggled.connect(lambda checked, f=sync_func: f())
+            # 初始化状态
+            sync_func()
+
+        # 存储到映射
+        if not hasattr(self, "multi_text_blank_radio_groups"):
+            self.multi_text_blank_radio_groups = {}
+        if not hasattr(self, "multi_text_blank_ai_checkboxes"):
+            self.multi_text_blank_ai_checkboxes = {}
+        self.multi_text_blank_radio_groups[idx] = blank_radio_groups
+        self.multi_text_blank_ai_checkboxes[idx] = blank_ai_checkboxes
+
     def _build_matrix_section(self, idx: int, entry: QuestionEntry, card: CardWidget,
                               card_layout: QVBoxLayout, option_texts: List[str], row_texts: List[str]) -> None:
         self._has_content = True

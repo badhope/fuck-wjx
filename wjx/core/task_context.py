@@ -41,6 +41,8 @@ class TaskContext:
     text_entry_types: List[str] = field(default_factory=list)
     text_ai_flags: List[bool] = field(default_factory=list)
     text_titles: List[str] = field(default_factory=list)
+    multi_text_blank_modes: List[List[str]] = field(default_factory=list)
+    multi_text_blank_ai_flags: List[List[bool]] = field(default_factory=list)
     single_option_fill_texts: List[Optional[List[Optional[str]]]] = field(default_factory=list)
     droplist_option_fill_texts: List[Optional[List[Optional[str]]]] = field(default_factory=list)
     multiple_option_fill_texts: List[Optional[List[Optional[str]]]] = field(default_factory=list)

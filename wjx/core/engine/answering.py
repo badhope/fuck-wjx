@@ -146,7 +146,7 @@ class _QuestionDispatcher:
                 print(f"第{question_num}题为位置题，暂不支持，已跳过")
                 return False
             _idx = config_entry[1] if config_entry and config_entry[0] == "text" else indices.get("text", 0)
-            _text_impl(driver, question_num, _idx, ctx.texts, ctx.texts_prob, ctx.text_entry_types, ctx.text_ai_flags, ctx.text_titles)
+            _text_impl(driver, question_num, _idx, ctx.texts, ctx.texts_prob, ctx.text_entry_types, ctx.text_ai_flags, ctx.text_titles, ctx.multi_text_blank_modes, ctx.multi_text_blank_ai_flags)
             indices["text"] = _idx + 1
             return None  # 文本题内部已处理计数，返回 None
 
@@ -322,6 +322,8 @@ def brush(
                             ctx.text_entry_types,
                             ctx.text_ai_flags,
                             ctx.text_titles,
+                            ctx.multi_text_blank_modes,
+                            ctx.multi_text_blank_ai_flags,
                         )
                         _indices["text"] += 1
                         print(

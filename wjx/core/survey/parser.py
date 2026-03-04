@@ -783,6 +783,50 @@ def _count_text_inputs_in_soup(question_div) -> int:
     return count
 
 
+def _extract_text_input_labels(question_div) -> List[str]:
+    """提取多项填空题每个输入框的标签信息"""
+    labels = []
+    try:
+        candidates = question_div.find_all(["input", "textarea", "span", "div"])
+    except Exception:
+        return labels
+
+    for cand in candidates:
+        try:
+            tag_name = (cand.name or "").lower()
+            input_type = (cand.get("type") or "").lower()
+            style_text = (cand.get("style") or "").lower()
+            class_attr = cand.get("class") or []
+            class_text = " ".join(class_attr).lower() if isinstance(class_attr, list) else str(class_attr).lower()
+            is_textcont = "textcont" in class_text or "textedit" in class_text
+
+            if input_type == "hidden" or "display:none" in style_text or "visibility:hidden" in style_text:
+                continue
+
+            if tag_name == "input":
+                sibling = cand.find_next_sibling()
+                if sibling and sibling.get("class") and any("textedit" in cls.lower() for cls in sibling.get("class")):
+                    continue
+
+            is_text_input = False
+            if tag_name == "textarea" or (tag_name == "input" and input_type in _TEXT_INPUT_ALLOWED_TYPES):
+                is_text_input = True
+            elif (cand.get("contenteditable") == "true" or is_textcont) and tag_name in {"span", "div"}:
+                is_text_input = True
+
+            if is_text_input:
+                label = cand.get("placeholder") or cand.get("aria-label") or cand.get("data-label") or ""
+                if not label:
+                    prev = cand.find_previous_sibling(string=True)
+                    if prev:
+                        label = prev.strip().rstrip("：:").strip()
+                labels.append(label if label else f"填空{len(labels) + 1}")
+        except Exception:
+            continue
+
+    return labels
+
+
 def _soup_question_looks_like_description(question_div, type_code: str) -> bool:
     """检测是否为说明页/阅读材料（有 topic 和 type 属性但无可交互控件）。
 
@@ -1025,6 +1069,7 @@ def parse_survey_questions_from_html(html: str) -> List[Dict[str, Any]]:
             if type_code == "8":
                 slider_min, slider_max, slider_step = _extract_slider_range(question_div, question_number)
             text_input_count = _count_text_inputs_in_soup(question_div)
+            text_input_labels = _extract_text_input_labels(question_div) if text_input_count > 1 else []
             has_gapfill = str(question_div.get("gapfill") or "").strip() == "1"
             is_text_like_question = _should_treat_question_as_text_like(type_code, option_count, text_input_count)
             is_multi_text = _should_mark_as_multi_text(type_code, option_count, text_input_count, is_location, has_gapfill)
@@ -1043,6 +1088,7 @@ def parse_survey_questions_from_html(html: str) -> List[Dict[str, Any]]:
                 "is_description": is_description,
                 "rating_max": rating_max,
                 "text_inputs": text_input_count,
+                "text_input_labels": text_input_labels,
                 "is_multi_text": is_multi_text,
                 "is_text_like": is_text_like_question,
                 "has_jump": has_jump,

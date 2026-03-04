@@ -215,6 +215,8 @@ def configure_probabilities(
     _target.text_entry_types = []
     _target.text_ai_flags = []
     _target.text_titles = []
+    _target.multi_text_blank_modes = []
+    _target.multi_text_blank_ai_flags = []
     _target.single_option_fill_texts = []
     _target.droplist_option_fill_texts = []
     _target.multiple_option_fill_texts = []
@@ -386,6 +388,8 @@ def configure_probabilities(
             _target.text_entry_types.append(entry.question_type)
             _target.text_ai_flags.append(ai_enabled)
             _target.text_titles.append(str(getattr(entry, "question_title", "") or ""))
+            _target.multi_text_blank_modes.append(getattr(entry, "multi_text_blank_modes", []))
+            _target.multi_text_blank_ai_flags.append(getattr(entry, "multi_text_blank_ai_flags", []))
 
 
 def validate_question_config(entries: List[QuestionEntry], questions_info: Optional[List[dict]] = None) -> Optional[str]:

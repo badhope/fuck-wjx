@@ -301,6 +301,8 @@ def text(
     text_entry_types_config: List[str],
     text_ai_flags: Optional[List[bool]] = None,
     text_titles: Optional[List[str]] = None,
+    multi_text_blank_modes: Optional[List[List[str]]] = None,
+    multi_text_blank_ai_flags: Optional[List[List[bool]]] = None,
 ) -> None:
     """填空题处理主函数"""
     if index < len(texts_config):
@@ -345,7 +347,17 @@ def text(
         except AIRuntimeError as exc:
             raise AIRuntimeError(f"第{current}题 AI 生成失败：{exc}") from exc
         _handle_single_text(driver, current, selected_answer)
-        # 记录统计数据（AI生成的答案）
+        record_answer(current, "text", text_answer=selected_answer)
+        return
+
+    # 多项填空题AI模式
+    if entry_kind == "multi_text" and ai_enabled:
+        try:
+            title = resolve_question_title_for_ai(driver, current, fallback_title)
+            selected_answer = generate_ai_answer(title)
+        except AIRuntimeError as exc:
+            raise AIRuntimeError(f"第{current}题 AI 生成失败：{exc}") from exc
+        _handle_multi_text(driver, current, selected_answer)
         record_answer(current, "text", text_answer=selected_answer)
         return
 
@@ -353,8 +365,14 @@ def text(
     selected_answer = resolved_candidates[selected_index] if resolved_candidates else DEFAULT_FILL_TEXT
 
     if entry_kind == "multi_text":
-        _handle_multi_text(driver, current, selected_answer)
-        # 记录统计数据
+        blank_modes = None
+        blank_ai_flags = None
+        if multi_text_blank_modes and index < len(multi_text_blank_modes):
+            blank_modes = multi_text_blank_modes[index]
+        if multi_text_blank_ai_flags and index < len(multi_text_blank_ai_flags):
+            blank_ai_flags = multi_text_blank_ai_flags[index]
+        title = resolve_question_title_for_ai(driver, current, fallback_title) if blank_ai_flags and any(blank_ai_flags) else ""
+        _handle_multi_text(driver, current, selected_answer, blank_modes, blank_ai_flags, title)
         record_answer(current, "text", text_answer=selected_answer)
         return
 
@@ -363,7 +381,7 @@ def text(
     record_answer(current, "text", text_answer=selected_answer)
 
 
-def _handle_multi_text(driver: BrowserDriver, current: int, selected_answer: str) -> None:
+def _handle_multi_text(driver: BrowserDriver, current: int, selected_answer: str, blank_modes: Optional[List[str]] = None, blank_ai_flags: Optional[List[bool]] = None, title: str = "") -> None:
     """处理多项填空题"""
     raw_text = "" if selected_answer is None else str(selected_answer)
     if MULTI_TEXT_DELIMITER in raw_text:
@@ -376,6 +394,27 @@ def _handle_multi_text(driver: BrowserDriver, current: int, selected_answer: str
 
     if not values or all(not v for v in values):
         values = [DEFAULT_FILL_TEXT]
+
+    # 处理每个填空项的随机模式和AI
+    if blank_modes or blank_ai_flags:
+        max_len = max(len(blank_modes) if blank_modes else 0, len(blank_ai_flags) if blank_ai_flags else 0)
+        while len(values) < max_len:
+            values.append(DEFAULT_FILL_TEXT)
+
+        for idx in range(min(len(values), max_len)):
+            # AI优先
+            if blank_ai_flags and idx < len(blank_ai_flags) and blank_ai_flags[idx]:
+                try:
+                    values[idx] = generate_ai_answer(title)
+                except AIRuntimeError:
+                    values[idx] = DEFAULT_FILL_TEXT
+            # 随机模式
+            elif blank_modes and idx < len(blank_modes):
+                mode = blank_modes[idx]
+                if mode == "name":
+                    values[idx] = resolve_dynamic_text_token("__RANDOM_NAME__")
+                elif mode == "mobile":
+                    values[idx] = resolve_dynamic_text_token("__RANDOM_MOBILE__")
 
     primary_inputs: List[Any] = []
     secondary_inputs: List[Any] = []

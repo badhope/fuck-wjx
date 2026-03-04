@@ -151,7 +151,15 @@ class DashboardEntriesMixin:
         for idx, enabled in ai_updates.items():
             if 0 <= idx < len(entries):
                 entry = entries[idx]
-                entry.ai_enabled = bool(enabled) if entry.question_type == "text" else False
+                entry.ai_enabled = bool(enabled) if entry.question_type in ("text", "multi_text") else False
+        multi_text_blank_modes_updates = dlg.get_multi_text_blank_modes()
+        for idx, modes in multi_text_blank_modes_updates.items():
+            if 0 <= idx < len(entries):
+                entries[idx].multi_text_blank_modes = modes
+        multi_text_blank_ai_updates = dlg.get_multi_text_blank_ai_flags()
+        for idx, flags in multi_text_blank_ai_updates.items():
+            if 0 <= idx < len(entries):
+                entries[idx].multi_text_blank_ai_flags = flags
         reverse_updates = dlg.get_reverse_results()
         for idx, rev_val in reverse_updates.items():
             if 0 <= idx < len(entries):

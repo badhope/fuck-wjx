@@ -312,7 +312,17 @@ class QuestionWizardDialog(WizardSectionsMixin, QDialog):
 
         # 题目描述
         if title_text:
-            desc = BodyLabel(_shorten_text(title_text, 120), card)
+            display_text = title_text
+            # 多项填空题：在题目内容中标注填空项位置
+            if idx < len(self.info):
+                text_inputs = self.info[idx].get("text_inputs", 0)
+                is_multi_text = self.info[idx].get("is_multi_text", False)
+                if (is_multi_text or text_inputs > 1) and text_inputs > 0:
+                    # 将题目文本按空格分隔，为每个部分添加编号
+                    parts = title_text.split()
+                    if len(parts) >= text_inputs:
+                        display_text = " ".join([f"{parts[i]}____(填空{i+1})" for i in range(text_inputs)])
+            desc = BodyLabel(_shorten_text(display_text, 120), card)
             desc.setWordWrap(True)
             desc.setStyleSheet("font-size: 12px; margin-bottom: 4px;")
             _apply_label_color(desc, "#555555", "#c8c8c8")
@@ -399,6 +409,34 @@ class QuestionWizardDialog(WizardSectionsMixin, QDialog):
     def get_text_random_modes(self) -> Dict[int, str]:
         """获取填空题随机值模式（none/name/mobile）"""
         return {idx: mode for idx, mode in self.text_random_mode_map.items()}
+
+    def get_multi_text_blank_modes(self) -> Dict[int, List[str]]:
+        """获取多项填空题每个填空项的随机模式"""
+        from .wizard_sections import _TEXT_RANDOM_NONE, _TEXT_RANDOM_NAME, _TEXT_RANDOM_MOBILE
+        result: Dict[int, List[str]] = {}
+        if not hasattr(self, "multi_text_blank_radio_groups"):
+            return result
+        for idx, groups in self.multi_text_blank_radio_groups.items():
+            modes: List[str] = []
+            for group in groups:
+                checked_id = group.checkedId()
+                if checked_id == 1:
+                    modes.append(_TEXT_RANDOM_NAME)
+                elif checked_id == 2:
+                    modes.append(_TEXT_RANDOM_MOBILE)
+                else:
+                    modes.append(_TEXT_RANDOM_NONE)
+            result[idx] = modes
+        return result
+
+    def get_multi_text_blank_ai_flags(self) -> Dict[int, List[bool]]:
+        """获取多项填空题每个填空项的AI标志"""
+        result: Dict[int, List[bool]] = {}
+        if not hasattr(self, "multi_text_blank_ai_checkboxes"):
+            return result
+        for idx, checkboxes in self.multi_text_blank_ai_checkboxes.items():
+            result[idx] = [cb.isChecked() for cb in checkboxes]
+        return result
 
     def get_ai_flags(self) -> Dict[int, bool]:
         """获取填空题是否启用 AI"""

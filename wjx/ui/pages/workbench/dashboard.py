@@ -223,7 +223,7 @@ class DashboardPage(
         title_row = QHBoxLayout()
         title_row.addWidget(SubtitleLabel("快捷设置", self))
         title_row.addStretch(1)
-        self.more_settings_btn = HyperlinkButton(FluentIcon.SETTING, "", "前往“运行参数”页仔细调整", self)
+        self.more_settings_btn = HyperlinkButton(FluentIcon.SETTING, "", "更多设置请前往“运行参数”页仔细调整", self)
         title_row.addWidget(self.more_settings_btn)
         exec_layout.addLayout(title_row)
 
