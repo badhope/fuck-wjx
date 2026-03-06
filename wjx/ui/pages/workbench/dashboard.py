@@ -259,7 +259,7 @@ class DashboardPage(
         exec_layout.addLayout(ip_row)
 
         self._ip_cost_infobar = FullWidthInfoBar(
-            icon=InfoBarIcon.INFORMATION,
+            icon=InfoBarIcon.WARNING,
             title="",
             content="",
             orient=Qt.Orientation.Horizontal,
@@ -268,6 +268,9 @@ class DashboardPage(
             duration=-1,
             parent=exec_card,
         )
+        self._ip_cost_adjust_link = HyperlinkButton(FluentIcon.LINK, "", "前往调整作答时长", self._ip_cost_infobar)
+        self._ip_cost_adjust_link.clicked.connect(self._go_to_runtime_answer_duration)
+        self._ip_cost_infobar.addWidget(self._ip_cost_adjust_link)
         self._ip_cost_infobar.hide()
         exec_layout.addWidget(self._ip_cost_infobar)
         layout.addWidget(exec_card)
@@ -363,7 +366,7 @@ class DashboardPage(
         self.random_ip_cb.stateChanged.connect(self._on_random_ip_toggled)
         self.card_btn.clicked.connect(self._on_card_code_clicked)
         self.more_settings_btn.clicked.connect(self._go_to_runtime_page)
-        self.runtime_page.answer_card.spinBox.valueChanged.connect(lambda _v: self._refresh_ip_cost_infobar())
+        self.runtime_page.answer_card.valueChanged.connect(lambda _v: self._refresh_ip_cost_infobar())
         self.runtime_page.timed_switch.checkedChanged.connect(lambda _v: self._refresh_ip_cost_infobar())
         # 监听问卷链接输入框的文本变化（用于检测 reset 命令）
         self.url_edit.textChanged.connect(self._on_url_text_changed)
@@ -690,6 +693,14 @@ class DashboardPage(
         main_win = self.window()
         if hasattr(main_win, "switchTo") and hasattr(main_win, "runtime_page"):
             main_win.switchTo(main_win.runtime_page)
+
+    def _go_to_runtime_answer_duration(self):
+        self._go_to_runtime_page()
+        try:
+            if hasattr(self.runtime_page, "focus_answer_duration_setting"):
+                self.runtime_page.focus_answer_duration_setting()
+        except Exception as exc:
+            log_suppressed_exception("_go_to_runtime_answer_duration", exc, level=logging.WARNING)
 
     def _build_config(self) -> RuntimeConfig:
         cfg = RuntimeConfig()

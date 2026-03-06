@@ -176,8 +176,16 @@ def _handle_aliyun_captcha_detected(
 ) -> None:
     """
     统一处理阿里云智能验证命中后的策略：
+    - 随机IP开启（random_proxy_ip_enabled=True）：仅记录日志，不全局暂停、不弹窗；
     - 默认（pause_on_aliyun_captcha=True）：全局暂停执行并提示用户启用随机 IP；
     - 关闭该开关：不全局暂停，仅记录告警（可能会导致后续持续失败）。
     """
+    if bool(getattr(ctx, "random_proxy_ip_enabled", False)):
+        logging.warning("随机IP模式命中阿里云智能验证：按配置仅记录日志，不暂停、不弹窗。")
+        return
+    if not bool(getattr(ctx, "pause_on_aliyun_captcha", True)):
+        logging.warning("检测到阿里云智能验证：pause_on_aliyun_captcha=False，仅记录告警。")
+        return
+
     _trigger_aliyun_captcha_stop(ctx, gui_instance, stop_signal)
 

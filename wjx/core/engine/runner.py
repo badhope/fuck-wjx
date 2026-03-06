@@ -49,7 +49,7 @@ from wjx.utils.app.config import (
 
 
 def _submission_blocked_by_security_check(driver: BrowserDriver) -> bool:
-    """检测提交后是否出现"需要安全校验/请重新提交"等拦截提示。"""
+    """检测提交后是否出现阿里云智能验证 DOM。"""
 
     script = r"""
         return (() => {
@@ -62,16 +62,6 @@ def _submission_blocked_by_security_check(driver: BrowserDriver) -> bool:
                 'aliyunCaptcha-checkbox-left',
                 'aliyunCaptcha-checkbox-text',
                 'aliyunCaptcha-certifyId',
-            ];
-
-            const textPatterns = [
-                /请完成安全验证/,
-                /点击开始智能验证/,
-                /需要安全校验/,
-                /请重新提交/,
-                /人机验证/,
-                /滑动验证/,
-                /安全验证失败/,
             ];
 
             const visible = (el, win) => {
@@ -88,29 +78,13 @@ def _submission_blocked_by_security_check(driver: BrowserDriver) -> bool:
                 for (const id of popupIds) {
                     const el = doc.getElementById(id);
                     if (visible(el, win)) return true;
-                }
-                return false;
-            };
-
-            const docHasStrongSecurityText = (doc) => {
-                const nodes = doc.querySelectorAll('button, a, span, div, p');
-                for (const el of nodes) {
-                    const win = doc.defaultView;
-                    if (!visible(el, win)) continue;
-                    const txt = (el.innerText || el.textContent || '').replace(/\s+/g, '');
-                    if (!txt) continue;
-                    for (const p of textPatterns) {
-                        if (p.test(txt)) return true;
                     }
-                }
                 return false;
             };
 
             const scanDoc = (doc) => {
                 if (!doc) return false;
-                if (docHasVisibleCaptchaDom(doc)) return true;
-                if (docHasStrongSecurityText(doc)) return true;
-                return false;
+                return docHasVisibleCaptchaDom(doc);
             };
 
             if (scanDoc(document)) return true;
@@ -303,15 +277,22 @@ def _check_captcha_after_submit(
 ) -> bool:
     """提交后检测阿里云验证码。返回 True 表示命中验证码。"""
     try:
-        handle_aliyun_captcha(
+        random_ip_enabled = bool(getattr(ctx, "random_proxy_ip_enabled", False))
+        detected = handle_aliyun_captcha(
             driver,
             timeout=3,
             stop_signal=stop_signal,
-            raise_on_detect=True,
+            raise_on_detect=not random_ip_enabled,
+            notify_on_detect=not random_ip_enabled,
         )
+        if detected and random_ip_enabled:
+            logging.warning("随机IP模式命中阿里云智能验证：仅记录失败并继续任务（不暂停、不弹窗）")
+            _handle_submission_failure(ctx, stop_signal)
+            _handle_aliyun_captcha_detected(ctx, gui_instance, stop_signal)
+            return True
         return False
     except AliyunCaptchaBypassError:
-        logging.warning("提交后检测到阿里云智能验证，触发全局暂停")
+        logging.warning("提交后检测到阿里云智能验证，触发验证码处理流程")
         _handle_submission_failure(ctx, stop_signal)
         _handle_aliyun_captcha_detected(ctx, gui_instance, stop_signal)
         return True
@@ -501,10 +482,10 @@ def run(
                         driver_had_error = True
                         break
 
-                # 5b. 安全校验文案检测
+                # 5b. 阿里云验证码 DOM 检测
                 if not stop_signal.is_set() and _submission_blocked_by_security_check(session.driver):
                     driver_had_error = True
-                    logging.warning("提交后检测到安全校验拦截提示，触发全局暂停")
+                    logging.warning("提交后检测到阿里云智能验证DOM，触发验证码处理流程")
                     _handle_submission_failure(ctx, stop_signal)
                     _handle_aliyun_captcha_detected(ctx, gui_instance, stop_signal)
                     break
@@ -516,11 +497,11 @@ def run(
                     session.driver, stop_signal, wait_seconds, poll_interval,
                 )
 
-                # 等待期间检查安全校验
+                # 等待期间再次检查阿里云验证码 DOM
                 if not completion_detected and not stop_signal.is_set():
                     if _submission_blocked_by_security_check(session.driver):
                         driver_had_error = True
-                        logging.warning("提交后等待完成页期间命中安全校验提示，触发全局暂停")
+                        logging.warning("提交后等待完成页期间命中阿里云智能验证DOM，触发验证码处理流程")
                         _handle_submission_failure(ctx, stop_signal)
                         _handle_aliyun_captcha_detected(ctx, gui_instance, stop_signal)
                         break

@@ -2,7 +2,8 @@
 import logging
 from typing import Optional
 
-from PySide6.QtCore import Qt, QStringListModel
+from PySide6.QtCore import Qt, QStringListModel, Signal
+from PySide6.QtGui import QIntValidator
 from PySide6.QtWidgets import QCompleter, QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
@@ -21,7 +22,6 @@ from qfluentwidgets import (
     SwitchButton,
     TransparentToolButton,
 )
-from wjx.ui.widgets.no_wheel import NoWheelSpinBox
 
 
 class SearchableComboBox(EditableComboBox):
@@ -507,46 +507,78 @@ class RandomUASettingCard(ExpandGroupSettingCard):
 
 
 class TimeRangeSettingCard(SettingCard):
-    """时间设置卡 - 使用单个秒数 SpinBox 输入框"""
+    """时间设置卡 - 使用普通数字输入框（秒）"""
+
+    valueChanged = Signal(int)
 
     def __init__(self, icon, title, content, max_seconds: int = 300, parent=None):
         super().__init__(icon, title, content, parent)
 
         self.max_seconds = max_seconds
+        self._current_value = 0
 
         self._input_container = QWidget(self)
         input_layout = QHBoxLayout(self._input_container)
         input_layout.setContentsMargins(0, 0, 0, 0)
         input_layout.setSpacing(8)
 
-        self.spinBox = NoWheelSpinBox(self._input_container)
-        self.spinBox.setRange(0, max_seconds)
-        self.spinBox.setFixedWidth(128)
-        self.spinBox.setFixedHeight(36)
-        self.spinBox.setValue(0)
-        self.spinBox.setToolTip(f"允许范围：0-{max_seconds} 秒")
+        self.inputEdit = LineEdit(self._input_container)
+        self.inputEdit.setValidator(QIntValidator(0, max_seconds, self.inputEdit))
+        self.inputEdit.setFixedWidth(128)
+        self.inputEdit.setFixedHeight(36)
+        self.inputEdit.setText("0")
+        self.inputEdit.setToolTip(f"允许范围：0-{max_seconds} 秒")
+        self.inputEdit.textChanged.connect(self._on_text_changed)
+        self.inputEdit.editingFinished.connect(self._normalize_text)
 
         sec_label = BodyLabel("秒", self._input_container)
         sec_label.setStyleSheet("color: #606060;")
 
-        input_layout.addWidget(self.spinBox)
+        input_layout.addWidget(self.inputEdit)
         input_layout.addWidget(sec_label)
 
         self.hBoxLayout.addWidget(self._input_container, 0, Qt.AlignmentFlag.AlignRight)
         self.hBoxLayout.addSpacing(16)
 
+    def _clamp_value(self, value: int) -> int:
+        return max(0, min(int(value), self.max_seconds))
+
+    @staticmethod
+    def _parse_digits(text: str, fallback: int) -> int:
+        raw = str(text or "").strip()
+        return int(raw) if raw.isdigit() else int(fallback)
+
+    def _on_text_changed(self, text: str):
+        value = self._clamp_value(self._parse_digits(text, fallback=0))
+        if value != self._current_value:
+            self._current_value = value
+            self.valueChanged.emit(value)
+
+    def _normalize_text(self):
+        self.setValue(self.getValue())
+
     def setEnabled(self, enabled):
         super().setEnabled(enabled)
-        self.spinBox.setEnabled(enabled)
+        self.inputEdit.setEnabled(enabled)
 
     def getValue(self) -> int:
         """获取当前秒数"""
-        return int(self.spinBox.value())
+        value = self._clamp_value(self._parse_digits(self.inputEdit.text(), fallback=self._current_value))
+        self._current_value = value
+        return value
 
     def setValue(self, value: int):
         """设置当前秒数"""
-        value = max(0, min(int(value), self.max_seconds))
-        self.spinBox.setValue(value)
+        value = self._clamp_value(value)
+        previous = self._current_value
+        self._current_value = value
+        display = str(value)
+        if self.inputEdit.text() != display:
+            self.inputEdit.blockSignals(True)
+            self.inputEdit.setText(display)
+            self.inputEdit.blockSignals(False)
+        if value != previous:
+            self.valueChanged.emit(value)
 
     def getRange(self) -> tuple:
         """兼容调用方：返回 (秒数, 秒数)"""

@@ -3,6 +3,7 @@ import logging
 from wjx.utils.logging.log_utils import log_suppressed_exception
 
 
+from PySide6.QtCore import QPoint, QTimer
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
@@ -169,6 +170,34 @@ class RuntimePage(ScrollArea):
         self.timed_card.helpButton.clicked.connect(self._show_timed_mode_help)
         self.proxy_source_combo.currentIndexChanged.connect(self._on_proxy_source_changed)
         self.reliability_mode_switch.checkedChanged.connect(self._on_reliability_mode_toggled)
+
+    def focus_answer_duration_setting(self):
+        """跳转并聚焦到“作答时长”设置项。"""
+
+        def _focus_target():
+            target_edit = getattr(self.answer_card, "inputEdit", None)
+            try:
+                # 把“作答时长”滚动到视口靠上位置，而不是仅仅可见
+                top_y = self.answer_card.mapTo(self.view, QPoint(0, 0)).y()
+                target_scroll = max(0, int(top_y - 16))
+                self.verticalScrollBar().setValue(target_scroll)
+            except Exception as exc:
+                log_suppressed_exception("focus_answer_duration_setting: verticalScrollBar().setValue(...)", exc, level=logging.DEBUG)
+            try:
+                if target_edit is not None:
+                    target_edit.setFocus()
+                    target_edit.selectAll()
+            except Exception as exc:
+                log_suppressed_exception("focus_answer_duration_setting: self.answer_card.inputEdit.setFocus()", exc, level=logging.DEBUG)
+            try:
+                # 兜底：极端布局场景下再做一次“至少可见”
+                self.ensureWidgetVisible(self.answer_card, 0, 24)
+            except Exception as exc:
+                log_suppressed_exception("focus_answer_duration_setting: ensureWidgetVisible", exc, level=logging.DEBUG)
+
+        # 页面切换后做两次定位，避免首帧布局尚未稳定导致的偏移
+        QTimer.singleShot(0, _focus_target)
+        QTimer.singleShot(80, _focus_target)
 
     def _resolve_thread_max(self, headless_enabled: bool) -> int:
         return self.HEADLESS_MAX_THREADS if headless_enabled else self.NON_HEADLESS_MAX_THREADS
