@@ -93,8 +93,8 @@ def _trigger_aliyun_captcha_stop(
                 message = (
                     "检测到阿里云智能验证，为避免继续失败提交已停止所有任务。\n\n"
                     f"建议启用随机 IP，但当前配额已用完（{count}/{limit}）。\n"
-                    "请先验证卡密解锁额度后再启用随机 IP。\n\n"
-                    "是否现在前往验证卡密？"
+                    "请先核销卡密解锁额度后再启用随机 IP。\n\n"
+                    "是否现在前往核销卡密？"
                 )
                 if gui_instance and hasattr(gui_instance, "_log_popup_confirm"):
                     go_verify = bool(gui_instance._log_popup_confirm("智能验证提示", message, icon="warning"))
@@ -110,7 +110,7 @@ def _trigger_aliyun_captcha_stop(
                         elif hasattr(gui_instance, "stack") and hasattr(gui_instance.stack, "setCurrentIndex"):
                             # 尝试切换到账号页面（通常索引为1）
                             gui_instance.stack.setCurrentIndex(1)
-                        logging.info("已引导用户前往账号页面验证卡密")
+                        logging.info("已引导用户前往账号页面核销卡密")
                     except Exception:
                         logging.warning("切换到账号页面失败", exc_info=True)
                 return

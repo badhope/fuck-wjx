@@ -35,8 +35,6 @@ class RuntimeAISection(QObject):
         "qwen": "https://help.aliyun.com/zh/model-studio/get-api-key",
         "siliconflow": "https://docs.siliconflow.cn/cn/userguide/quickstart#2-%E6%9F%A5%E7%9C%8B%E6%A8%A1%E5%9E%8B%E5%88%97%E8%A1%A8%E5%92%8C%E6%A8%A1%E5%9E%8B%E8%AF%A6%E6%83%85",
         "volces": "https://www.volcengine.com/docs/82379/1399008?lang=zh#da0e9d90",
-        "openai": "https://platform.openai.com/docs/quickstart?desktop-os=windows",
-        "gemini": "https://ai.google.dev/gemini-api/docs/quickstart?hl=zh-cn",
         "custom": "https://platform.openai.com/docs/api-reference/introduction",
     }
 

@@ -186,7 +186,7 @@ class CardUnlockDialog(StatusPollingMixin, QDialog):
         action_row.addStretch(1)
         
         self.cancel_btn = PushButton("稍后再说", self)
-        self.ok_btn = PrimaryPushButton("验证卡密", self, FluentIcon.COMPLETED)
+        self.ok_btn = PrimaryPushButton("核销卡密", self, FluentIcon.COMPLETED)
         self.validate_spinner = IndeterminateProgressRing(self)
         self.validate_spinner.setFixedSize(18, 18)
         self.validate_spinner.setStrokeWidth(2)

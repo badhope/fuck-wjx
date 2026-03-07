@@ -104,7 +104,7 @@ def on_random_ip_toggle(gui: Any) -> None:
         _set_random_ip_enabled(gui, False)
         return
     if count >= limit:
-        _invoke_popup(gui, "warning", "提示", f"随机IP已达{limit}份限制，请验证卡密后再启用。")
+        _invoke_popup(gui, "warning", "提示", f"随机IP已达{limit}份限制，请核销卡密后再启用。")
         _set_random_ip_enabled(gui, False)
         return
     if confirm_random_ip_usage(gui):

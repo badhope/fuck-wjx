@@ -249,7 +249,7 @@ class DashboardPage(
         exec_layout.addWidget(self.random_ip_cb)
         ip_row = QHBoxLayout()
         ip_row.setSpacing(8)
-        ip_row.addWidget(BodyLabel("随机IP计数：", self))
+        ip_row.addWidget(BodyLabel("随机IP额度：", self))
         self.random_ip_hint = BodyLabel("--/--", self)
         ip_row.addWidget(self.random_ip_hint)
         ip_row.addSpacing(4)
@@ -304,7 +304,7 @@ class DashboardPage(
         self.command_bar.addAction(self.del_action)
 
         # 清空全部
-        self.clear_all_action = Action(FluentIcon.DELETE, "清空所有已配置题目")
+        self.clear_all_action = Action(FluentIcon.BROOM, "清空所有已配置题目")
         self.command_bar.addAction(self.clear_all_action)
         
         list_layout.addWidget(self.command_bar)

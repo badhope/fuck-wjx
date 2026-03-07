@@ -42,7 +42,7 @@ def _validate_card(card_code: str) -> tuple[bool, Optional[int]]:
     if not card_code:
         return False, None
     if not CARD_VALIDATION_ENDPOINT:
-        logging.error("未配置 CARD_VALIDATION_ENDPOINT，无法验证卡密")
+        logging.error("未配置 CARD_VALIDATION_ENDPOINT，无法核销卡密")
         return False, None
 
     code = card_code.strip()

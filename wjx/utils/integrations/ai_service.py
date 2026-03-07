@@ -30,18 +30,6 @@ AI_PROVIDERS = {
         "recommended_models": ["doubao-seed-1-8-251228", "glm-4-7-251222", "doubao-seed-1-6-251015", "doubao-seed-1-6-lite-251015", "doubao-seed-1-6-flash-250828", "doubao-seed-1-6-250615"],
         "default_model": "doubao-seed-1-8-251228",
     },
-    "openai": {
-        "label": "ChatGPT",
-        "base_url": "https://api.openai.com/v1",
-        "recommended_models": ["gpt-5.2-2025-12-11", "gpt-5-2025-08-07", "gpt-5-mini-2025-08-07", "gpt-5-nano-2025-08-07", "gpt-4.1-2025-04-14", "chatgpt-4o-latest"],
-        "default_model": "gpt-5-mini-2025-08-07",
-    },
-    "gemini": {
-        "label": "Gemini",
-        "base_url": "https://generativelanguage.googleapis.com/v1beta",
-        "recommended_models": ["gemini-3-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"],
-        "default_model": "gemini-3-flash-preview",
-    },
     "custom": {
         "label": "自定义 (OpenAI 兼容)",
         "base_url": "",
@@ -134,46 +122,6 @@ def _call_openai_compatible(
         raise RuntimeError(f"API 调用失败: {e}")
 
 
-def _call_gemini(
-    api_key: str,
-    model: str,
-    question: str,
-    system_prompt: str,
-    timeout: int = 30,
-) -> str:
-    """调用 Google Gemini API"""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-    headers = {"Content-Type": "application/json"}
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": f"{system_prompt}\n\n请简短回答这个问卷问题：{question}"}
-                ]
-            }
-        ],
-        "generationConfig": {
-            "maxOutputTokens": 200,
-            "temperature": 0.7,
-        },
-    }
-    try:
-        resp = http_client.post(url, headers=headers, json=payload, timeout=timeout)
-        resp.raise_for_status()
-        data = resp.json()
-        text = (
-            data.get("candidates", [{}])[0]
-            .get("content", {})
-            .get("parts", [{}])[0]
-            .get("text")
-        )
-        if not text:
-            raise RuntimeError("Gemini API 返回内容为空")
-        return str(text).strip()
-    except Exception as e:
-        raise RuntimeError(f"Gemini API 调用失败: {e}")
-
-
 def generate_answer(question_title: str) -> str:
     """根据问题标题生成答案"""
     config = get_ai_settings()
@@ -194,11 +142,10 @@ def generate_answer(question_title: str) -> str:
             raise RuntimeError("自定义模式需要配置 Base URL")
         if not model:
             raise RuntimeError("自定义模式需要配置模型名称")
-    elif provider == "gemini":
-        model = config["model"] or AI_PROVIDERS["gemini"]["default_model"]
-        return _call_gemini(api_key, model, question_title, system_prompt)
     else:
-        provider_config = AI_PROVIDERS.get(provider, AI_PROVIDERS["openai"])
+        provider_config = AI_PROVIDERS.get(provider)
+        if not provider_config:
+            raise RuntimeError(f"不支持的 AI 服务提供商: {provider}")
         base_url = provider_config["base_url"]
         model = config["model"] or provider_config["default_model"]
         if provider == "siliconflow" and not model:

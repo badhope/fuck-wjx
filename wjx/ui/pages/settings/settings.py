@@ -256,6 +256,18 @@ class SettingsPage(ScrollArea):
         
         # 动态设置日志级别
         set_debug_mode(checked)
+
+        # 调试模式切换后，立即刷新主页“解锁大额IP”按钮可用性
+        try:
+            from wjx.network.proxy import get_random_ip_counter_snapshot_local
+
+            win = self.window()
+            dashboard = getattr(win, "dashboard", None)
+            if dashboard and hasattr(dashboard, "update_random_ip_counter"):
+                count, limit, custom_api = get_random_ip_counter_snapshot_local()
+                dashboard.update_random_ip_counter(count, limit, custom_api)
+        except Exception as exc:
+            log_suppressed_exception("_apply_debug_mode_state: refresh_random_ip_button", exc, level=logging.DEBUG)
         
         if show_tip:
             InfoBar.success(
