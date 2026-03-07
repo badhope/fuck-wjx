@@ -21,6 +21,7 @@ def _timed_mode_active(ctx: TaskContext) -> bool:
 def _handle_submission_failure(
     ctx: TaskContext,
     stop_signal: Optional[threading.Event],
+    thread_name: Optional[str] = None,
 ) -> bool:
     """
     递增失败计数；当开启失败止损时超过阈值会触发停止。
@@ -32,6 +33,11 @@ def _handle_submission_failure(
             print(f"已失败{ctx.cur_fail}次, 失败次数达到{int(ctx.fail_threshold)}次将强制停止")
         else:
             print(f"已失败{ctx.cur_fail}次（失败止损已关闭）")
+    if thread_name:
+        try:
+            ctx.increment_thread_fail(thread_name, status_text="失败重试")
+        except Exception:
+            logging.debug("更新线程失败计数失败", exc_info=True)
     if ctx.stop_on_fail_enabled and ctx.cur_fail >= ctx.fail_threshold:
         logging.critical("失败次数过多，强制停止，请检查配置是否正确")
         if stop_signal:

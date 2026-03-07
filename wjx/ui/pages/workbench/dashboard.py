@@ -7,7 +7,7 @@ from wjx.utils.logging.log_utils import log_suppressed_exception
 
 
 from PySide6.QtCore import Qt, QObject, QEvent, Signal
-from PySide6.QtGui import QContextMenuEvent
+from PySide6.QtGui import QContextMenuEvent, QShortcut
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -18,14 +18,12 @@ from qfluentwidgets import (
     ScrollArea,
     SubtitleLabel,
     BodyLabel,
-    StrongBodyLabel,
     CardWidget,
     PushButton,
     PrimaryPushButton,
     TableWidget,
     LineEdit,
     CheckBox,
-    ProgressBar,
     IndeterminateProgressRing,
     CommandBar,
     Action,
@@ -34,12 +32,14 @@ from qfluentwidgets import (
     InfoBarPosition,
     InfoBarIcon,
     HyperlinkButton,
-    MessageBox,
+    SegmentedWidget,
+    DrillInTransitionStackedWidget,
 )
 from qfluentwidgets import RoundMenu
 
 from wjx.ui.pages.workbench.dashboard_parts.clipboard import DashboardClipboardMixin
 from wjx.ui.pages.workbench.dashboard_parts.entries import DashboardEntriesMixin
+from wjx.ui.pages.workbench.dashboard_parts.progress import DashboardProgressMixin
 from wjx.ui.pages.workbench.dashboard_parts.random_ip import DashboardRandomIPMixin
 from wjx.ui.widgets import ConfigDrawer
 from wjx.ui.widgets.full_width_infobar import FullWidthInfoBar
@@ -75,6 +75,7 @@ class DashboardPage(
     DashboardClipboardMixin,
     DashboardRandomIPMixin,
     DashboardEntriesMixin,
+    DashboardProgressMixin,
     QWidget,
 ):
     """主页：左侧配置 + 底部状态，不再包含日志。"""
@@ -115,7 +116,9 @@ class DashboardPage(
         self._ip_balance_fetch_interval_sec = 30.0
         self._debug_reset_in_progress = False
         self._debug_reset_started_at = 0.0
+        self._debug_reset_shortcut: Optional[QShortcut] = None
         self._clipboard_parse_ticket = 0
+        self._init_progress_state()
         self._build_ui()
         self.config_drawer = ConfigDrawer(self, self._load_config_from_path)
         self._bind_events()
@@ -275,20 +278,36 @@ class DashboardPage(
         exec_layout.addWidget(self._ip_cost_infobar)
         layout.addWidget(exec_card)
 
-        list_card = CardWidget(self)
-        list_layout = QVBoxLayout(list_card)
-        list_layout.setContentsMargins(12, 12, 12, 12)
-        list_layout.setSpacing(8)
-        title_row = QHBoxLayout()
-        self.title_label = SubtitleLabel("题目清单与操作", self)
-        self.count_label = BodyLabel("0 题", self)
+        switch_row = QHBoxLayout()
+        switch_row.setContentsMargins(0, 0, 0, 0)
+        switch_row.setSpacing(8)
+        self.thread_view_seg = SegmentedWidget(self)
+        self.thread_view_seg.addItem(routeKey=self.THREAD_VIEW_QUESTION_LIST, text="题目清单")
+        self.thread_view_seg.addItem(routeKey=self.THREAD_VIEW_PROGRESS, text="线程进度")
+        self.thread_view_seg.setCurrentItem(self.THREAD_VIEW_QUESTION_LIST)
+        switch_row.addWidget(self.thread_view_seg)
+        switch_row.addStretch(1)
+        layout.addLayout(switch_row)
+
+        self.thread_view_stack = DrillInTransitionStackedWidget(self)
+
+        self.thread_view_question_card = CardWidget(self.thread_view_stack)
+        question_list_layout = QVBoxLayout(self.thread_view_question_card)
+        question_list_layout.setContentsMargins(12, 12, 12, 12)
+        question_list_layout.setSpacing(8)
+
+        question_title_row = QHBoxLayout()
+        question_title_row.setSpacing(8)
+        self.title_label = SubtitleLabel("题目清单与操作", self.thread_view_question_card)
+        self.count_label = BodyLabel("0 题", self.thread_view_question_card)
         self.count_label.setStyleSheet("color: #6b6b6b;")
-        title_row.addWidget(self.title_label)
-        title_row.addStretch(1)
-        title_row.addWidget(self.count_label)
-        list_layout.addLayout(title_row)
+        question_title_row.addWidget(self.title_label)
+        question_title_row.addStretch(1)
+        question_title_row.addWidget(self.count_label)
+        question_list_layout.addLayout(question_title_row)
+
         # 使用 CommandBar 替代普通按钮布局
-        self.command_bar = CommandBar(self)
+        self.command_bar = CommandBar(self.thread_view_question_card)
         self.command_bar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         
         # 新增题目
@@ -307,8 +326,8 @@ class DashboardPage(
         self.clear_all_action = Action(FluentIcon.BROOM, "清空所有已配置题目")
         self.command_bar.addAction(self.clear_all_action)
         
-        list_layout.addWidget(self.command_bar)
-        self.entry_table = TableWidget(self)
+        question_list_layout.addWidget(self.command_bar)
+        self.entry_table = TableWidget(self.thread_view_question_card)
         self.entry_table.setRowCount(0)
         self.entry_table.setColumnCount(3)
         self.entry_table.setHorizontalHeaderLabels(["序号", "类型", "策略"])
@@ -324,37 +343,28 @@ class DashboardPage(
         header.setSectionResizeMode(2, header.ResizeMode.Stretch)
         self.entry_table.setColumnWidth(0, 60)
         self.entry_table.setColumnWidth(1, 180)
-        list_layout.addWidget(self.entry_table)
-        layout.addWidget(list_card, 1)
+        question_list_layout.addWidget(self.entry_table, 1)
+
+        self.thread_view_progress_card = CardWidget(self.thread_view_stack)
+        progress_card_layout = QVBoxLayout(self.thread_view_progress_card)
+        progress_card_layout.setContentsMargins(12, 12, 12, 12)
+        progress_card_layout.setSpacing(8)
+        progress_title_row = QHBoxLayout()
+        progress_title_row.setSpacing(8)
+        progress_title_row.addWidget(SubtitleLabel("线程进度", self.thread_view_progress_card))
+        progress_title_row.addStretch(1)
+        progress_card_layout.addLayout(progress_title_row)
+        thread_progress_page = self._build_thread_progress_panel(self.thread_view_progress_card)
+        progress_card_layout.addWidget(thread_progress_page, 1)
+
+        self.thread_view_stack.addWidget(self.thread_view_question_card)
+        self.thread_view_stack.addWidget(self.thread_view_progress_card)
+        self._set_thread_view(self.THREAD_VIEW_QUESTION_LIST, animate=False)
+        layout.addWidget(self.thread_view_stack, 1)
 
         layout.addStretch(1)
         outer.addWidget(scroll, 1)
-
-        bottom = CardWidget(self)
-        bottom_layout = QHBoxLayout(bottom)
-        bottom_layout.setContentsMargins(12, 10, 12, 10)
-        bottom_layout.setSpacing(10)
-        self.status_label = StrongBodyLabel("等待配置...", self)
-        self.progress_bar = ProgressBar(self)
-        self.progress_bar.setValue(0)
-        self.progress_pct = StrongBodyLabel("0%", self)
-        self.progress_pct.setMinimumWidth(50)
-        self.progress_pct.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.progress_pct.setStyleSheet("font-size: 13px; font-weight: bold;")
-        self.start_btn = PrimaryPushButton("开始执行", self)
-        self.resume_btn = PrimaryPushButton("继续", self)
-        self.resume_btn.setEnabled(False)
-        self.resume_btn.hide()
-        self.stop_btn = PushButton("停止", self)
-        self.stop_btn.setEnabled(False)
-        self.start_btn.setToolTip("请先配置题目（至少 1 题）")
-        bottom_layout.addWidget(self.status_label)
-        bottom_layout.addWidget(self.progress_bar, 1)
-        bottom_layout.addWidget(self.progress_pct)
-        bottom_layout.addWidget(self.start_btn)
-        bottom_layout.addWidget(self.resume_btn)
-        bottom_layout.addWidget(self.stop_btn)
-        outer.addWidget(bottom)
+        self._build_bottom_status_card(outer)
 
     def _bind_events(self):
         self.parse_btn.clicked.connect(self._on_parse_clicked)
@@ -362,9 +372,8 @@ class DashboardPage(
         self.load_cfg_btn.clicked.connect(self._on_load_config)
         self.save_cfg_btn.clicked.connect(self._on_save_config)
         self.qr_btn.clicked.connect(self._on_qr_clicked)
-        self.start_btn.clicked.connect(self._on_start_clicked)
-        self.resume_btn.clicked.connect(self._on_resume_clicked)
-        self.stop_btn.clicked.connect(lambda: self.controller.stop_run())
+        self._bind_progress_events()
+        self.thread_view_seg.currentItemChanged.connect(self._on_thread_view_changed)
         self.target_spin.valueChanged.connect(lambda v: self.runtime_page.target_spin.setValue(int(v)))
         self.thread_spin.valueChanged.connect(lambda v: self.runtime_page.thread_spin.setValue(int(v)))
         self.random_ip_cb.stateChanged.connect(self._on_random_ip_toggled)
@@ -372,8 +381,8 @@ class DashboardPage(
         self.more_settings_btn.clicked.connect(self._go_to_runtime_page)
         self.runtime_page.answer_card.valueChanged.connect(lambda _v: self._refresh_ip_cost_infobar())
         self.runtime_page.timed_switch.checkedChanged.connect(lambda _v: self._refresh_ip_cost_infobar())
-        # 监听问卷链接输入框的文本变化（用于检测 reset 命令）
-        self.url_edit.textChanged.connect(self._on_url_text_changed)
+        # 绑定调试重置快捷键（Alt+Shift+R）
+        self._bind_debug_reset_shortcut()
         # 监听剪贴板变化，自动处理粘贴的图片
         from PySide6.QtWidgets import QApplication
         clipboard = QApplication.clipboard()
@@ -587,87 +596,6 @@ class DashboardPage(
             self._completion_notified = False
             self.status_label.setText(f"已提交 0/{cfg.target} 份 | 失败 0 次")
         self.controller.start_run(cfg)
-
-    def update_status(self, text: str, current: int, target: int):
-        self.status_label.setText(text)
-        progress = 0
-        if target > 0:
-            progress = min(100, int((current / max(target, 1)) * 100))
-        self.progress_bar.setValue(progress)
-        self.progress_pct.setText(f"{progress}%")
-        self._last_progress = progress
-        if (
-            target > 0
-            and current >= target
-            and not self._completion_notified
-        ):
-            self._completion_notified = True
-            self._toast("全部份数已完成", "success", duration=5000)
-            self.stop_btn.setEnabled(False)
-            self.start_btn.setEnabled(True)
-            self.start_btn.setText("重新开始")
-
-    def on_run_state_changed(self, running: bool):
-        self._sync_start_button_state(running=running)
-        self.stop_btn.setEnabled(running)
-        if not running:
-            self.resume_btn.setEnabled(False)
-            self.resume_btn.hide()
-        if running:
-            self._completion_notified = False
-            self.start_btn.setText("执行中...")
-            self.start_btn.setEnabled(False)
-            self._toast("已启动任务", "success", 1500)
-        else:
-            # 停止后根据进度调整按钮提示
-            if self._completion_notified or self._last_progress >= 100:
-                self.start_btn.setText("重新开始")
-            else:
-                self.start_btn.setText("开始执行")
-            self.start_btn.setEnabled(self._has_question_entries())
-            self.stop_btn.setEnabled(False)
-            if not self._completion_notified:
-                self._show_end_toast_after_cleanup = True
-            if self._pending_restart:
-                self._pending_restart = False
-                self._on_start_clicked()
-
-    def on_cleanup_finished(self):
-        if self._show_end_toast_after_cleanup:
-            self._show_end_toast_after_cleanup = False
-            self._toast("任务结束", "info", 1500)
-
-    def on_pause_state_changed(self, paused: bool, reason: str = ""):
-        self._last_pause_reason = str(reason or "")
-        if not getattr(self.controller, "running", False):
-            self.resume_btn.setEnabled(False)
-            self.resume_btn.hide()
-            return
-        if paused:
-            self.resume_btn.show()
-            self.resume_btn.setEnabled(True)
-            msg = f"已暂停：{reason}" if reason else "已暂停"
-            self._toast(msg, "warning", 2200)
-        else:
-            self.resume_btn.setEnabled(False)
-            self.resume_btn.hide()
-            self._toast("已继续执行", "success", 1500)
-
-    def _on_resume_clicked(self):
-        if not getattr(self.controller, "running", False):
-            return
-        reason = str(self._last_pause_reason or "")
-        if "扣费" in reason or ("代理" in reason and "连续" in reason):
-            box = MessageBox(
-                "继续执行？",
-                "当前处于“代理不可用保护暂停”状态。\n继续执行会重新请求代理并产生费用，确定继续吗？",
-                self.window() or self,
-            )
-            box.yesButton.setText("继续执行")
-            box.cancelButton.setText("取消")
-            if not box.exec():
-                return
-        self.controller.resume_run()
 
     def update_question_meta(self, title: str, count: int):
         self.count_label.setText(f"{count} 题")

@@ -320,6 +320,12 @@ def brush(
     stop_signal: Optional[threading.Event] = None,
 ) -> bool:
     """批量填写一份问卷；返回 True 代表完整提交，False 代表过程中被用户打断。"""
+    thread_name = threading.current_thread().name or "Worker-?"
+    try:
+        ctx.update_thread_status(thread_name, "识别题目", running=True)
+    except Exception:
+        logging.debug("更新线程状态失败：识别题目", exc_info=True)
+
     # 每份问卷开始前：生成画像 → 重置上下文 → 重置倾向
     # 画像必须在 reset_tendency() 之前设置，因为倾向模块会参考画像的满意度
     persona = generate_persona()
@@ -337,6 +343,14 @@ def brush(
     logging.debug("本轮画像：%s", persona.to_description())
     questions_per_page = detect(driver, stop_signal=stop_signal)
     fast_mode = _is_fast_mode(ctx)
+    try:
+        total_steps = sum(max(0, int(count or 0)) for count in questions_per_page)
+    except Exception:
+        total_steps = 0
+    try:
+        ctx.update_thread_step(thread_name, 0, total_steps, status_text="答题中", running=True)
+    except Exception:
+        logging.debug("初始化线程步骤进度失败", exc_info=True)
 
     # 各题型计数器统一放入字典，方便 dispatcher 内部修改
     _indices: Dict[str, int] = {
@@ -356,14 +370,33 @@ def brush(
         return bool(active_stop and active_stop.is_set())
 
     if _abort_requested():
+        try:
+            ctx.update_thread_status(thread_name, "已中断", running=False)
+        except Exception:
+            logging.debug("更新线程状态失败：已中断", exc_info=True)
         return False
 
     total_pages = len(questions_per_page)
     for page_index, questions_count in enumerate(questions_per_page):
         for _ in range(1, questions_count + 1):
             if _abort_requested():
+                try:
+                    ctx.update_thread_status(thread_name, "已中断", running=False)
+                except Exception:
+                    logging.debug("更新线程状态失败：已中断", exc_info=True)
                 return False
             current_question_number += 1
+            if total_steps > 0:
+                try:
+                    ctx.update_thread_step(
+                        thread_name,
+                        current_question_number,
+                        total_steps,
+                        status_text="答题中",
+                        running=True,
+                    )
+                except Exception:
+                    logging.debug("更新线程步骤进度失败", exc_info=True)
             question_selector = f"#div{current_question_number}"
             try:
                 question_div = driver.find_element(By.CSS_SELECTOR, question_selector)
@@ -458,19 +491,35 @@ def brush(
 
         _human_scroll_after_question(driver)
         if _abort_requested():
+            try:
+                ctx.update_thread_status(thread_name, "已中断", running=False)
+            except Exception:
+                logging.debug("更新线程状态失败：已中断", exc_info=True)
             return False
         buffer_delay = 0.0 if fast_mode else 0.5
         if buffer_delay > 0:
             if active_stop:
                 if active_stop.wait(buffer_delay):
+                    try:
+                        ctx.update_thread_status(thread_name, "已中断", running=False)
+                    except Exception:
+                        logging.debug("更新线程状态失败：已中断", exc_info=True)
                     return False
             else:
                 time.sleep(buffer_delay)
         is_last_page = (page_index == total_pages - 1)
         if is_last_page:
             if simulate_answer_duration_delay(active_stop, ctx.answer_duration_range_seconds):
+                try:
+                    ctx.update_thread_status(thread_name, "已中断", running=False)
+                except Exception:
+                    logging.debug("更新线程状态失败：已中断", exc_info=True)
                 return False
             if _abort_requested():
+                try:
+                    ctx.update_thread_status(thread_name, "已中断", running=False)
+                except Exception:
+                    logging.debug("更新线程状态失败：已中断", exc_info=True)
                 return False
             # 最后一页直接跳出循环，由后续的 submit() 处理提交
             break
@@ -481,12 +530,28 @@ def brush(
         if click_delay > 0:
             if active_stop:
                 if active_stop.wait(click_delay):
+                    try:
+                        ctx.update_thread_status(thread_name, "已中断", running=False)
+                    except Exception:
+                        logging.debug("更新线程状态失败：已中断", exc_info=True)
                     return False
             else:
                 time.sleep(click_delay)
     if _abort_requested():
+        try:
+            ctx.update_thread_status(thread_name, "已中断", running=False)
+        except Exception:
+            logging.debug("更新线程状态失败：已中断", exc_info=True)
         reset_persona()
         return False
+    try:
+        ctx.update_thread_status(thread_name, "提交中", running=True)
+    except Exception:
+        logging.debug("更新线程状态失败：提交中", exc_info=True)
     submit(driver, ctx=ctx, stop_signal=active_stop)
+    try:
+        ctx.update_thread_status(thread_name, "等待结果确认", running=True)
+    except Exception:
+        logging.debug("更新线程状态失败：等待结果确认", exc_info=True)
     reset_persona()
     return True

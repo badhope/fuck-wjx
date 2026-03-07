@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import time
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -14,6 +15,22 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 # ---------------------------------------------------------------------------
 # 答题内容配置（由 configure_probabilities 写入）
 # ---------------------------------------------------------------------------
+
+
+@dataclass
+class ThreadProgressState:
+    """单个工作线程的运行状态快照。"""
+
+    thread_name: str
+    thread_index: int = 0
+    success_count: int = 0
+    fail_count: int = 0
+    step_current: int = 0
+    step_total: int = 0
+    status_text: str = "等待中"
+    running: bool = False
+    last_update_ts: float = 0.0
+
 
 @dataclass
 class TaskContext:
@@ -95,6 +112,7 @@ class TaskContext:
     # ── 运行时计数（引擎动态更新，需加锁！） ─────────────────────────────
     cur_num: int = 0
     cur_fail: int = 0
+    thread_progress: Dict[str, ThreadProgressState] = field(default_factory=dict)
 
     # ── 停止控制 ──────────────────────────────────────────────────────────
     stop_event: threading.Event = field(default_factory=threading.Event)
@@ -136,3 +154,161 @@ class TaskContext:
             and self.submit_interval_range_seconds == (0, 0)
             and self.answer_duration_range_seconds == (0, 0)
         )
+
+    @staticmethod
+    def _resolve_thread_index(thread_name: str) -> int:
+        text = str(thread_name or "").strip()
+        if not text:
+            return 0
+        if text.startswith("Worker-"):
+            suffix = text.split("-", 1)[1].strip()
+            try:
+                value = int(suffix)
+                return value if value > 0 else 0
+            except Exception:
+                return 0
+        tail = []
+        for ch in reversed(text):
+            if ch.isdigit():
+                tail.append(ch)
+            else:
+                break
+        if not tail:
+            return 0
+        try:
+            return int("".join(reversed(tail)))
+        except Exception:
+            return 0
+
+    def _get_or_create_thread_state_locked(self, thread_name: str) -> ThreadProgressState:
+        key = str(thread_name or "").strip() or "Worker-?"
+        state = self.thread_progress.get(key)
+        if state is not None:
+            return state
+        state = ThreadProgressState(
+            thread_name=key,
+            thread_index=self._resolve_thread_index(key),
+            last_update_ts=time.time(),
+        )
+        self.thread_progress[key] = state
+        return state
+
+    def ensure_worker_threads(self, expected_count: int) -> None:
+        """预创建 Worker-1..N 的进度行，便于 UI 提前渲染。"""
+        count = max(1, int(expected_count or 1))
+        now = time.time()
+        with self.lock:
+            for idx in range(1, count + 1):
+                name = f"Worker-{idx}"
+                state = self.thread_progress.get(name)
+                if state is None:
+                    self.thread_progress[name] = ThreadProgressState(
+                        thread_name=name,
+                        thread_index=idx,
+                        last_update_ts=now,
+                    )
+                else:
+                    state.thread_index = idx
+                    state.last_update_ts = now
+
+    def update_thread_status(
+        self,
+        thread_name: str,
+        status_text: str,
+        *,
+        running: Optional[bool] = None,
+    ) -> None:
+        now = time.time()
+        with self.lock:
+            state = self._get_or_create_thread_state_locked(thread_name)
+            state.status_text = str(status_text or "")
+            if running is not None:
+                state.running = bool(running)
+            state.last_update_ts = now
+
+    def update_thread_step(
+        self,
+        thread_name: str,
+        step_current: int,
+        step_total: int,
+        *,
+        status_text: Optional[str] = None,
+        running: Optional[bool] = None,
+    ) -> None:
+        now = time.time()
+        current = max(0, int(step_current or 0))
+        total = max(0, int(step_total or 0))
+        if total > 0:
+            current = min(current, total)
+        with self.lock:
+            state = self._get_or_create_thread_state_locked(thread_name)
+            state.step_current = current
+            state.step_total = total
+            if status_text is not None:
+                state.status_text = str(status_text or "")
+            if running is not None:
+                state.running = bool(running)
+            state.last_update_ts = now
+
+    def increment_thread_success(self, thread_name: str, *, status_text: str = "提交成功") -> None:
+        now = time.time()
+        with self.lock:
+            state = self._get_or_create_thread_state_locked(thread_name)
+            state.success_count += 1
+            if state.step_total > 0:
+                state.step_current = state.step_total
+            state.status_text = str(status_text or "提交成功")
+            state.running = True
+            state.last_update_ts = now
+
+    def increment_thread_fail(self, thread_name: str, *, status_text: str = "失败重试") -> None:
+        now = time.time()
+        with self.lock:
+            state = self._get_or_create_thread_state_locked(thread_name)
+            state.fail_count += 1
+            state.status_text = str(status_text or "失败重试")
+            state.running = True
+            state.last_update_ts = now
+
+    def mark_thread_finished(self, thread_name: str, *, status_text: str = "已停止") -> None:
+        now = time.time()
+        with self.lock:
+            state = self._get_or_create_thread_state_locked(thread_name)
+            state.running = False
+            state.status_text = str(status_text or "已停止")
+            state.last_update_ts = now
+
+    def snapshot_thread_progress(self) -> List[Dict[str, Any]]:
+        """返回线程进度快照（用于 UI 刷新，已排序）。"""
+        with self.lock:
+            rows = []
+            for state in self.thread_progress.values():
+                total = max(0, int(state.step_total or 0))
+                current = max(0, int(state.step_current or 0))
+                if total > 0:
+                    current = min(current, total)
+                    step_percent = int(min(100, (current / float(total)) * 100))
+                else:
+                    step_percent = 0
+                rows.append(
+                    {
+                        "thread_name": state.thread_name,
+                        "thread_index": int(state.thread_index or 0),
+                        "success_count": int(state.success_count or 0),
+                        "fail_count": int(state.fail_count or 0),
+                        "step_current": current,
+                        "step_total": total,
+                        "step_percent": step_percent,
+                        "status_text": str(state.status_text or ""),
+                        "running": bool(state.running),
+                        "last_update_ts": float(state.last_update_ts or 0.0),
+                    }
+                )
+        rows.sort(
+            key=lambda item: (
+                item["thread_index"] <= 0,
+                item["thread_index"] if item["thread_index"] > 0 else 10**9,
+                item["thread_name"],
+            )
+        )
+        return rows

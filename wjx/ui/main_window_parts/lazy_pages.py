@@ -13,7 +13,7 @@ from qfluentwidgets import (
 )
 
 if TYPE_CHECKING:
-    from PySide6.QtWidgets import QStackedWidget, QWidget
+    from PySide6.QtWidgets import QStackedWidget
     from wjx.ui.pages.workbench.answer_rules import AnswerRulesPage
     from wjx.ui.pages.workbench.dashboard import DashboardPage
     from wjx.ui.pages.workbench.runtime import RuntimePage

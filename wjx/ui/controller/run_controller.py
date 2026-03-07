@@ -164,6 +164,7 @@ class RunController(QObject):
     runStateChanged = Signal(bool)
     runFailed = Signal(str)
     statusUpdated = Signal(str, int, int)
+    threadProgressUpdated = Signal(dict)
     pauseStateChanged = Signal(bool, str)
     cleanupFinished = Signal()
     _uiCallbackQueued = Signal(object)
@@ -707,6 +708,7 @@ class RunController(QObject):
     def _start_workers_with_proxy_pool(self, config: RuntimeConfig, proxy_pool: List[str]) -> None:
         # 构建并注入完整的 TaskContext
         ctx = self._prepare_engine_state(config, proxy_pool)
+        ctx.ensure_worker_threads(max(1, int(config.threads or 1)))
         # 将之前所配置的题目概率内容合并入正式 ctx
         pending = getattr(self, '_pending_question_ctx', None)
         if pending is not None:
@@ -881,6 +883,29 @@ class RunController(QObject):
         if paused and reason:
             status = f"{status} | {reason}"
         self.statusUpdated.emit(status, int(current), int(target or 0))
+        thread_rows = []
+        num_threads = 0
+        per_thread_target = 0
+        if ctx is not None:
+            try:
+                thread_rows = ctx.snapshot_thread_progress()
+            except Exception:
+                logging.debug("获取线程进度快照失败", exc_info=True)
+                thread_rows = []
+            try:
+                num_threads = max(1, int(getattr(ctx, "num_threads", 1) or 1))
+            except Exception:
+                num_threads = 1
+            if int(target or 0) > 0:
+                per_thread_target = int(math.ceil(float(target) / float(num_threads)))
+        self.threadProgressUpdated.emit(
+            {
+                "threads": thread_rows,
+                "target": int(target or 0),
+                "num_threads": int(num_threads or 0),
+                "per_thread_target": int(per_thread_target or 0),
+            }
+        )
 
         if paused != self._paused_state:
             self._paused_state = paused

@@ -346,7 +346,8 @@ class ContactForm(StatusPollingMixin, QWidget):
             self.cancel_btn.clicked.connect(self.cancelRequested.emit)
 
     def eventFilter(self, watched, event):
-        if watched is self.message_edit and event.type() == QEvent.Type.KeyPress:
+        message_edit = getattr(self, "message_edit", None)
+        if message_edit is not None and watched is message_edit and event.type() == QEvent.Type.KeyPress:
             key_event = cast(QKeyEvent, event)
             if key_event.matches(QKeySequence.StandardKey.Paste):
                 if self._handle_clipboard_image():

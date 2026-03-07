@@ -6,7 +6,8 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from PySide6.QtCore import QSettings, QTimer
+from PySide6.QtCore import QSettings, QTimer, Qt
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QDialog
 from qfluentwidgets import FluentIcon
 
@@ -27,7 +28,7 @@ from wjx.utils.logging.log_utils import log_suppressed_exception
 from wjx.utils.system.registry_manager import RegistryManager
 
 if TYPE_CHECKING:
-    from qfluentwidgets import BodyLabel, CheckBox, LineEdit, PushButton
+    from qfluentwidgets import BodyLabel, CheckBox, PushButton
     from wjx.ui.controller import RunController
     from wjx.ui.pages.workbench.runtime import RuntimePage
     from wjx.ui.widgets.full_width_infobar import FullWidthInfoBar
@@ -38,7 +39,6 @@ class DashboardRandomIPMixin:
 
     if TYPE_CHECKING:
         # 以下属性由 DashboardPage 主类提供，此处仅用于 Pylance 类型检查
-        url_edit: LineEdit
         card_btn: PushButton
         random_ip_hint: BodyLabel
         random_ip_cb: CheckBox
@@ -55,6 +55,7 @@ class DashboardRandomIPMixin:
         _ip_balance_fetch_interval_sec: float
         _debug_reset_in_progress: bool
         _debug_reset_started_at: float
+        _debug_reset_shortcut: Optional[QShortcut]
         _debugResetFinished: Any  # PySide6.QtCore.Signal，Mixin 中无法精确声明描述符类型
         _ipBalanceChecked: Any   # 同上
 
@@ -66,23 +67,25 @@ class DashboardRandomIPMixin:
         settings = QSettings("FuckWjx", "Settings")
         return get_bool_from_qsettings(settings.value("debug_mode"), False)
 
-    def _on_url_text_changed(self, text: str):
-        """监听问卷链接输入框文本变化，检测 reset 命令（仅调试模式下可用）"""
-        if text.strip().lower() != "reset":
+    def _bind_debug_reset_shortcut(self) -> None:
+        """绑定全局调试重置快捷键：Alt+Shift+R。"""
+        if getattr(self, "_debug_reset_shortcut", None) is not None:
             return
+        shortcut = QShortcut(QKeySequence("Alt+Shift+R"), self)
+        shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        shortcut.activated.connect(self._on_debug_reset_shortcut_activated)
+        self._debug_reset_shortcut = shortcut
 
-        settings = QSettings("FuckWjx", "Settings")
-        debug_mode = get_bool_from_qsettings(settings.value("debug_mode"), False)
-        if not debug_mode:
+    def _on_debug_reset_shortcut_activated(self) -> None:
+        """仅在调试模式下触发随机IP额度重置。"""
+        if not self._is_debug_mode_enabled():
             return
 
         if self._debug_reset_in_progress:
-            self.url_edit.clear()
             return
 
         self._debug_reset_in_progress = True
         self._debug_reset_started_at = time.monotonic()
-        self.url_edit.clear()
         self._toast("正在重置随机IP额度...", "info", duration=-1, show_progress=True)
 
         thread = threading.Thread(
