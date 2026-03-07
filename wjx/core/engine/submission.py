@@ -3,7 +3,7 @@ import logging
 import threading
 import time
 from typing import Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 import httpx
 
@@ -11,7 +11,14 @@ from wjx.core.engine.runtime_control import _is_fast_mode, _sleep_with_stop
 from wjx.core.questions.utils import extract_text_from_element as _extract_text_from_element
 from wjx.core.task_context import TaskContext
 from wjx.network.browser import By, BrowserDriver, NoSuchElementException, TimeoutException
+from wjx.network.proxy import (
+    PROXY_SOURCE_CUSTOM,
+    PROXY_SOURCE_DEFAULT,
+    _normalize_proxy_address,
+    get_proxy_source,
+)
 from wjx.utils.app.config import SUBMIT_CLICK_SETTLE_DELAY, SUBMIT_INITIAL_DELAY
+from wjx.utils.app.config import get_proxy_auth
 from wjx.utils.logging.log_utils import log_suppressed_exception
 
 
@@ -157,6 +164,48 @@ def _collect_page_cookies(driver: BrowserDriver, submit_url: str) -> dict:
     return cookie_map
 
 
+def _build_submit_proxy_url(proxy_address: Optional[str]) -> Optional[str]:
+    """构造给 httpx 使用的代理 URL，必要时补全认证信息。"""
+    normalized = _normalize_proxy_address(proxy_address)
+    if not normalized:
+        return None
+
+    try:
+        parsed = urlparse(normalized)
+    except Exception:
+        return normalized
+
+    scheme = str(parsed.scheme or "http").lower()
+    host = str(parsed.hostname or "").strip()
+    if not host:
+        return normalized
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    host_port = f"{host}:{parsed.port}" if parsed.port else host
+
+    username = parsed.username
+    password = parsed.password
+    if (
+        not username
+        and get_proxy_source() in (PROXY_SOURCE_DEFAULT, PROXY_SOURCE_CUSTOM)
+    ):
+        try:
+            auth = get_proxy_auth()
+            username, password = auth.split(":", 1)
+        except Exception:
+            username = None
+            password = None
+
+    if username:
+        user = quote(str(username), safe="")
+        pwd = quote("" if password is None else str(password), safe="")
+        netloc = f"{user}:{pwd}@{host_port}"
+    else:
+        netloc = host_port
+
+    return f"{scheme}://{netloc}"
+
+
 def _capture_submit_request_via_route(
     driver: BrowserDriver,
     *,
@@ -241,10 +290,12 @@ def _submit_via_headless_httpx(
 
     request_headers = _sanitize_request_headers(captured.get("headers") or {})
     cookies = _collect_page_cookies(driver, submit_url)
+    submit_proxy = _build_submit_proxy_url(getattr(driver, "_submit_proxy_address", None))
+    logging.debug("无头+httpx 提交代理状态: %s", "enabled" if submit_proxy else "disabled")
     timeout = httpx.Timeout(20.0, connect=10.0)
 
     try:
-        with httpx.Client(timeout=timeout, follow_redirects=False) as client:
+        with httpx.Client(timeout=timeout, follow_redirects=False, proxy=submit_proxy) as client:
             response = client.request(
                 method=method,
                 url=submit_url,

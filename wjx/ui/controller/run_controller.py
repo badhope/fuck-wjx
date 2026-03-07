@@ -534,7 +534,7 @@ class RunController(QObject):
 
     def _prepare_engine_state(self, config: RuntimeConfig, proxy_pool: List[str]) -> TaskContext:
         """构建本次任务的 TaskContext。"""
-        fail_threshold = max(1, math.ceil(config.target / 4) + 1)
+        fail_threshold = 5
         config_title = str(getattr(config, "survey_title", "") or "")
         fallback_title = str(getattr(self, "survey_title", "") or "")
         survey_title = config_title or fallback_title
@@ -879,7 +879,7 @@ class RunController(QObject):
             reason = ""
 
         status_prefix = "已暂停" if paused else "已提交"
-        status = f"{status_prefix} {current}/{target} 份 | 失败 {fail} 次"
+        status = f"{status_prefix} {current}/{target} 份 | 连续失败 {fail} 次"
         if paused and reason:
             status = f"{status} | {reason}"
         self.statusUpdated.emit(status, int(current), int(target or 0))

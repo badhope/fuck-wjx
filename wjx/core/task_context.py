@@ -88,7 +88,7 @@ class TaskContext:
     browser_preference: List[str] = field(default_factory=list)
     num_threads: int = 1
     target_num: int = 1
-    fail_threshold: int = 1
+    fail_threshold: int = 5
     stop_on_fail_enabled: bool = True
 
     # ── 时间 / 节奏配置 ───────────────────────────────────────────────────
@@ -111,7 +111,7 @@ class TaskContext:
 
     # ── 运行时计数（引擎动态更新，需加锁！） ─────────────────────────────
     cur_num: int = 0
-    cur_fail: int = 0
+    cur_fail: int = 0  # 全线程共享的连续失败计数，成功提交后归零
     thread_progress: Dict[str, ThreadProgressState] = field(default_factory=dict)
 
     # ── 停止控制 ──────────────────────────────────────────────────────────
@@ -179,6 +179,15 @@ class TaskContext:
             return int("".join(reversed(tail)))
         except Exception:
             return 0
+
+    @staticmethod
+    def _format_thread_display_name(thread_name: str, thread_index: int) -> str:
+        if thread_index > 0:
+            return f"线程 {thread_index}"
+        text = str(thread_name or "").strip()
+        if text.startswith("Worker-?"):
+            return "线程 ?"
+        return text or "线程 ?"
 
     def _get_or_create_thread_state_locked(self, thread_name: str) -> ThreadProgressState:
         key = str(thread_name or "").strip() or "Worker-?"
@@ -293,6 +302,10 @@ class TaskContext:
                 rows.append(
                     {
                         "thread_name": state.thread_name,
+                        "thread_display_name": self._format_thread_display_name(
+                            state.thread_name,
+                            int(state.thread_index or 0),
+                        ),
                         "thread_index": int(state.thread_index or 0),
                         "success_count": int(state.success_count or 0),
                         "fail_count": int(state.fail_count or 0),

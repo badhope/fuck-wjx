@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
     CardWidget,
@@ -70,6 +70,7 @@ class DashboardProgressMixin:
         thread_panel_layout = QVBoxLayout(self.thread_progress_panel)
         thread_panel_layout.setContentsMargins(0, 4, 0, 0)
         thread_panel_layout.setSpacing(6)
+        thread_panel_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.thread_progress_hint = BodyLabel("线程进度会在任务开始后显示", self.thread_progress_panel)
         self.thread_progress_hint.setStyleSheet("color: #6b6b6b;")
         thread_panel_layout.addWidget(self.thread_progress_hint)
@@ -77,7 +78,13 @@ class DashboardProgressMixin:
         self.thread_progress_rows_layout = QVBoxLayout(self.thread_progress_rows_container)
         self.thread_progress_rows_layout.setContentsMargins(0, 0, 0, 0)
         self.thread_progress_rows_layout.setSpacing(8)
-        thread_panel_layout.addWidget(self.thread_progress_rows_container)
+        self.thread_progress_rows_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.thread_progress_rows_container.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Maximum,
+        )
+        thread_panel_layout.addWidget(self.thread_progress_rows_container, 0)
+        thread_panel_layout.addStretch(1)
         return self.thread_progress_panel
 
     def _on_thread_view_changed(self, route_key: str):
@@ -187,6 +194,7 @@ class DashboardProgressMixin:
 
     def _create_thread_progress_row(self, thread_name: str) -> Dict[str, Any]:
         row_widget = QWidget(self.thread_progress_rows_container)
+        row_widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         row_layout = QVBoxLayout(row_widget)
         row_layout.setContentsMargins(8, 6, 8, 6)
         row_layout.setSpacing(4)
@@ -279,11 +287,14 @@ class DashboardProgressMixin:
             thread_name = str(item.get("thread_name") or "").strip()
             if not thread_name:
                 continue
+            thread_display_name = str(item.get("thread_display_name") or thread_name).strip() or thread_name
             seen_names.add(thread_name)
             row = self._thread_progress_rows.get(thread_name)
             if row is None:
-                row = self._create_thread_progress_row(thread_name)
+                row = self._create_thread_progress_row(thread_display_name)
                 self._thread_progress_rows[thread_name] = row
+            else:
+                row["name"].setText(thread_display_name)
 
             status_text = str(item.get("status_text") or "运行中")
             if not bool(item.get("running", True)) and not status_text:

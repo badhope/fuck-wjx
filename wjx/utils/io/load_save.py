@@ -458,6 +458,7 @@ def _sanitize_runtime_config_payload(raw: Dict[str, Any]) -> RuntimeConfig:
         config.reliability_mode_type = "simple"
     config.psycho_target_alpha = _as_float(raw.get("psycho_target_alpha") or 0.85, 0.85)
     config.psycho_target_alpha = max(0.70, min(0.95, config.psycho_target_alpha))
+    config.headless_mode = _as_bool(raw.get("headless_mode"), False)
     config.debug_mode = bool(raw.get("debug_mode", False))
     config.answer_rules = []
     raw_rules = raw.get("answer_rules")

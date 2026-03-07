@@ -1,7 +1,5 @@
 # 开发环境
 *.code-workspace
-.github_token
-.clinerules/
 .claude/
 .codex/
 .gemini/

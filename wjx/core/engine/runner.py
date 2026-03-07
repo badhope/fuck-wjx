@@ -208,6 +208,13 @@ class _BrowserSession:
             else:
                 _reset_bad_proxy_streak(self.ctx)
 
+        browser_proxy_address = self.proxy_address
+        submit_proxy_address = None
+        if self.ctx.headless_mode and self.proxy_address:
+            # 无头模式下将页面流量固定走本机，只让最终提交请求走代理。
+            browser_proxy_address = None
+            submit_proxy_address = self.proxy_address
+
         ua_value, _ = _select_user_agent_for_session(self.ctx)
 
         if not self.sem_acquired:
@@ -225,7 +232,7 @@ class _BrowserSession:
             self.driver, active_browser = create_playwright_driver(
                 headless=self.ctx.headless_mode,
                 prefer_browsers=list(preferred_browsers) if preferred_browsers else None,
-                proxy_address=self.proxy_address,
+                proxy_address=browser_proxy_address,
                 user_agent=ua_value,
                 window_position=(window_x_pos, window_y_pos),
                 manager=self._browser_manager,
@@ -239,6 +246,7 @@ class _BrowserSession:
             raise
 
         self._register_driver(self.driver)
+        setattr(self.driver, "_submit_proxy_address", submit_proxy_address)
         self.driver.set_window_size(550, 650)
         return active_browser
 
@@ -317,14 +325,20 @@ def _record_successful_submission(
     trigger_target_stop = False
     should_break = False
     record_thread_success = False
+    previous_consecutive_failures = 0
 
     with ctx.lock:
         if ctx.target_num <= 0 or ctx.cur_num < ctx.target_num:
+            previous_consecutive_failures = int(ctx.cur_fail or 0)
             ctx.cur_num += 1
+            # 连续失败计数：一旦出现成功提交，立即全局清零。
+            ctx.cur_fail = 0
             record_thread_success = True
             logging.info(
-                f"[OK] 已填写{ctx.cur_num}份 - 失败{ctx.cur_fail}次 - {time.strftime('%H:%M:%S', time.localtime(time.time()))}"
+                f"[OK] 已填写{ctx.cur_num}份 - 连续失败{ctx.cur_fail}次 - {time.strftime('%H:%M:%S', time.localtime(time.time()))}"
             )
+            if previous_consecutive_failures > 0:
+                logging.debug("提交成功，连续失败计数已清零（重置前=%s）", previous_consecutive_failures)
             should_handle_random_ip = ctx.random_proxy_ip_enabled
             if ctx.target_num > 0 and ctx.cur_num >= ctx.target_num:
                 trigger_target_stop = True
