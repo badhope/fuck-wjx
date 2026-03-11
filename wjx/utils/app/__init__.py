@@ -8,8 +8,6 @@ from wjx.utils.app.config import (
 )
 from wjx.utils.app.version import __VERSION__, GITHUB_OWNER, GITHUB_REPO
 from wjx.utils.app.runtime_paths import (
-    _get_project_root,
-    _get_runtime_directory,
     _get_resource_path,
 )
 
@@ -22,7 +20,5 @@ __all__ = [
     "__VERSION__",
     "GITHUB_OWNER",
     "GITHUB_REPO",
-    "_get_project_root",
-    "_get_runtime_directory",
     "_get_resource_path",
 ]

@@ -415,45 +415,6 @@ def _preview_release_notes(text: str, limit: int) -> str:
     return preview
 
 
-def check_updates_on_startup(gui=None, *, on_result=None) -> None:
-    """后台检查更新。可传入 gui 或 on_result 回调以接收结果。"""
-
-    def _runner():
-        try:
-            logging.debug("开始检查更新...")
-            update_info = UpdateManager.check_updates()
-            logging.debug(f"检查更新结果: {update_info}")
-            status = update_info.get("status", "unknown") if update_info else "unknown"
-            if status == "outdated":
-                if gui is not None:
-                    setattr(gui, "update_info", update_info)
-                    callback = getattr(gui, "show_update_notification", None) or getattr(
-                        gui, "_show_update_notification", None
-                    )
-                    logging.debug(f"找到回调函数: {callback}")
-                    if callable(callback):
-                        callback()
-                if callable(on_result):
-                    on_result(update_info)
-            else:
-                logging.debug(f"更新检查状态: {status}")
-                # 通知 GUI 根据状态显示对应徽章
-                if gui is not None:
-                    notify = getattr(gui, "_notify_version_status", None)
-                    if callable(notify):
-                        notify(status)
-                    else:
-                        # 兼容旧接口
-                        if status == "latest":
-                            notify_latest = getattr(gui, "_notify_latest_version", None)
-                            if callable(notify_latest):
-                                notify_latest()
-        except Exception as exc:
-            logging.warning(f"启动时检查更新失败: {exc}")
-
-    Thread(target=_runner, daemon=True).start()
-
-
 def show_update_notification(gui) -> None:
     """显示更新通知（如果 gui.update_info 存在）。"""
     if not getattr(gui, "update_info", None):

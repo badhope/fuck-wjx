@@ -1,7 +1,6 @@
 """配置存取与数据处理"""
 from wjx.utils.io.load_save import (
     RuntimeConfig,
-    ConfigPersistenceMixin,
     load_config,
     save_config,
     get_runtime_directory,
@@ -12,7 +11,6 @@ from wjx.utils.io.markdown_utils import strip_markdown, convert_github_admonitio
 
 __all__ = [
     "RuntimeConfig",
-    "ConfigPersistenceMixin",
     "load_config",
     "save_config",
     "get_runtime_directory",

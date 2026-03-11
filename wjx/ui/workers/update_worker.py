@@ -8,12 +8,9 @@ class UpdateCheckWorker(QThread):
 
     # 信号：更新检查完成 (has_update: bool, update_info: dict)
     update_checked = Signal(bool, dict)
-    # 信号：检查失败 (error_message: str)  —— 保留兼容，但正常情况下不再使用
-    check_failed = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.parent_window = parent
 
     def run(self):
         """在后台线程执行更新检查"""
@@ -43,4 +40,3 @@ class UpdateCheckWorker(QThread):
             logging.warning(error_msg)
             # 异常情况也通过 update_checked 发送，status=unknown
             self.update_checked.emit(False, {"has_update": False, "status": "unknown"})
-            self.check_failed.emit(error_msg)

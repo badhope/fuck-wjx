@@ -59,14 +59,6 @@ class MainWindow(
 ):
     """主窗口，PowerToys 风格导航 + 圆角布局，支持主题动态切换。"""
 
-    # 更新通知信号（用于跨线程通信）
-
-
-    updateAvailable = Signal()
-    # 最新版本信号
-    isLatestVersion = Signal()
-    # 版本状态信号（latest/preview/unknown），用于从后台线程安全通知主线程
-    versionStatus = Signal(str)
     # 下载开始信号（显示转圈动画）
     downloadStarted = Signal()
     # 下载进度信号
@@ -170,13 +162,6 @@ class MainWindow(
 
         finish_boot_splash(1500)
 
-        # 连接更新通知信号
-        self.updateAvailable.connect(self._do_show_update_notification)
-        self.updateAvailable.connect(self._show_outdated_badge)
-        # 连接最新版本信号（兼容旧路径）
-        self.isLatestVersion.connect(self._show_latest_version_badge)
-        # 连接版本状态信号（新路径，区分 latest/preview/unknown）
-        self.versionStatus.connect(self._apply_version_status_badge)
         # 连接下载开始信号（显示转圈动画）
         self.downloadStarted.connect(self._on_download_started)
         # 连接下载进度信号

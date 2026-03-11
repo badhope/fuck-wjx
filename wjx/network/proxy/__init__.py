@@ -28,7 +28,6 @@ from wjx.network.proxy.quota import (
     normalize_random_ip_enabled_value,
 )
 from wjx.network.proxy.gui_bridge import (
-    ensure_random_ip_ready,
     handle_random_ip_submission,
     on_random_ip_toggle,
     refresh_ip_counter_display,
@@ -44,7 +43,6 @@ __all__ = [
     "_mask_proxy_for_log",
     "_normalize_proxy_address",
     "_proxy_is_responsive",
-    "ensure_random_ip_ready",
     "get_default_proxy_area_code",
     "get_random_ip_counter_snapshot_local",
     "get_effective_proxy_api_url",

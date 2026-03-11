@@ -16,7 +16,6 @@ from wjx.utils.logging.log_utils import (
     register_popup_handler,
     save_log_records_to_file,
 )
-from wjx.utils.io.load_save import ConfigPersistenceMixin
 from wjx.utils.update.updater import check_for_updates, perform_update
 from wjx.utils.system.registry_manager import RegistryManager
 from wjx.utils.event_bus import (
@@ -48,7 +47,6 @@ __all__ = [
     "LOG_BUFFER_HANDLER",
     "register_popup_handler",
     "save_log_records_to_file",
-    "ConfigPersistenceMixin",
     "check_for_updates",
     "perform_update",
     "RegistryManager",

@@ -602,13 +602,3 @@ def _fetch_new_proxy_batch(
     return normalized[: max(1, expected_count)]
 
 
-# 向后兼容重新导出
-from .quota import get_random_ip_limit, get_random_ip_counter_snapshot_local, normalize_random_ip_enabled_value  # noqa: F401
-from .gui_bridge import (  # noqa: F401
-    confirm_random_ip_usage,
-    on_random_ip_toggle,
-    ensure_random_ip_ready,
-    refresh_ip_counter_display,
-    handle_random_ip_submission,
-    show_quota_request_dialog,
-)

@@ -243,12 +243,6 @@ def on_random_ip_toggle(gui: Any) -> None:
     _set_random_ip_enabled(gui, False)
 
 
-def ensure_random_ip_ready(gui: Any) -> bool:
-    if getattr(gui, "_random_ip_disclaimer_ack", False):
-        return True
-    return confirm_random_ip_usage(gui)
-
-
 def _try_activate_trial(gui: Any = None) -> tuple[bool, bool]:
     global _counter_refresh_cache
     try:

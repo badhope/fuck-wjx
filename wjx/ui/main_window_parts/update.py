@@ -29,15 +29,12 @@ class MainWindowUpdateMixin:
     if TYPE_CHECKING:
         from typing import Any
         titleBar: Any
-        updateAvailable: Any
-        isLatestVersion: Any
         downloadProgress: Any
         _toast: Any
         _log_popup_confirm: Any
         _log_popup_error: Any
         close: Any
         _settings_page: Any
-        versionStatus: Any
 
     def _check_update_on_startup(self):
         """根据设置在启动时检查更新（后台异步执行）"""
@@ -50,7 +47,6 @@ class MainWindowUpdateMixin:
             # 创建后台Worker
             self._update_worker = UpdateCheckWorker(self)
             self._update_worker.update_checked.connect(self._on_update_checked)
-            self._update_worker.check_failed.connect(self._on_update_check_failed)
             self._update_worker.start()
 
             logging.debug("已启动后台更新检查")
@@ -76,22 +72,6 @@ class MainWindowUpdateMixin:
             # unknown：网络失败或无法判断
             self._check_preview_version()
             self._show_unknown_badge()
-
-    def _notify_version_status(self, status: str):
-        """从后台线程安全地通知版本状态（通过信号转到主线程）"""
-        if hasattr(self, "versionStatus"):
-            self.versionStatus.emit(status)
-        else:
-            # 兼容旧接口
-            if status == "latest":
-                self.isLatestVersion.emit()
-
-    def _on_update_check_failed(self, error_message: str):
-        """更新检查失败的回调（Worker 异常时触发，正常情况下不再使用）"""
-        self._clear_update_checking_placeholder()
-        self._check_preview_version()
-        logging.debug(f"更新检查失败: {error_message}")
-        self._show_unknown_badge()
 
     def _show_update_checking_placeholder(self):
         """更新检查期间在标题栏徽章位置显示转圈占位。"""
@@ -128,8 +108,9 @@ class MainWindowUpdateMixin:
         self._update_checking_spinner = None
 
     def _show_update_notification(self):
-        """显示更新通知（从后台线程安全调用）"""
-        self.updateAvailable.emit()
+        """显示更新通知并更新标题栏徽章。"""
+        self._show_outdated_badge()
+        self._do_show_update_notification()
 
     def _do_show_update_notification(self):
         """实际显示更新通知（使用简单纯文本样式）"""
@@ -223,10 +204,6 @@ class MainWindowUpdateMixin:
             self.titleBar.hBoxLayout.insertWidget(2, self._preview_badge, 0, Qt.AlignmentFlag.AlignVCenter)
         except Exception:
             logging.debug("显示预览版徽章失败", exc_info=True)
-
-    def _notify_latest_version(self):
-        """通知已是最新版本（从后台线程安全调用）"""
-        self.isLatestVersion.emit()
 
     def _show_download_toast(self, total_size: int = 0, show_spinner: bool = False):
         """显示下载进度Toast（右下角）"""

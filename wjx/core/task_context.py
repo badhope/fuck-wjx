@@ -104,7 +104,6 @@ class TaskContext:
     random_proxy_ip_enabled: bool = False
     proxy_ip_pool: List[str] = field(default_factory=list)
     random_user_agent_enabled: bool = False
-    user_agent_pool_keys: List[str] = field(default_factory=list)
     user_agent_ratios: Dict[str, int] = field(
         default_factory=lambda: {"wechat": 33, "mobile": 33, "pc": 34}
     )

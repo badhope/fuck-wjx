@@ -11,7 +11,6 @@ from wjx.network.browser import (
 )
 from wjx.network.proxy import (
     on_random_ip_toggle,
-    ensure_random_ip_ready,
     handle_random_ip_submission,
 )
 
@@ -25,7 +24,6 @@ __all__ = [
     "TimeoutException",
     "create_playwright_driver",
     "on_random_ip_toggle",
-    "ensure_random_ip_ready",
     "handle_random_ip_submission",
 ]
 

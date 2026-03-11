@@ -4,7 +4,7 @@ import logging
 
 from wjx.core.task_context import TaskContext
 from wjx.network.proxy import _fetch_new_proxy_batch, _mask_proxy_for_log
-from wjx.utils.io.load_save import _select_user_agent_from_keys, _select_user_agent_from_ratios
+from wjx.utils.io.load_save import _select_user_agent_from_ratios
 from wjx.utils.logging.log_utils import log_suppressed_exception
 
 
@@ -70,11 +70,7 @@ def _select_proxy_for_session(ctx: TaskContext) -> Optional[str]:
 def _select_user_agent_for_session(ctx: TaskContext) -> Tuple[Optional[str], Optional[str]]:
     if not ctx.random_user_agent_enabled:
         return None, None
-    # 优先使用占比配置
-    if ctx.user_agent_ratios:
-        return _select_user_agent_from_ratios(ctx.user_agent_ratios)
-    # 兼容旧的keys配置
-    return _select_user_agent_from_keys(ctx.user_agent_pool_keys)
+    return _select_user_agent_from_ratios(ctx.user_agent_ratios)
 
 
 def _discard_unresponsive_proxy(ctx: TaskContext, proxy_address: str) -> None:

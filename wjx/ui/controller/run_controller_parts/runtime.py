@@ -130,7 +130,6 @@ class RunControllerRuntimeMixin:
             random_proxy_ip_enabled=config.random_ip_enabled,
             proxy_ip_pool=list(proxy_pool) if config.random_ip_enabled else [],
             random_user_agent_enabled=config.random_ua_enabled,
-            user_agent_pool_keys=list(config.random_ua_keys),
             user_agent_ratios=dict(getattr(config, "random_ua_ratios", {"wechat": 33, "mobile": 33, "pc": 34})),
             answer_rules=copy.deepcopy(getattr(config, "answer_rules", []) or []),
             psycho_target_alpha=psycho_target_alpha,

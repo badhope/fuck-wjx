@@ -285,12 +285,3 @@ class ChangelogPage(QWidget):
         saved = self._scroll_pos
         # 等动画结束后恢复滚动位置（DrillIn 动画约 333ms）
         QTimer.singleShot(380, lambda: self._list_page.restore_scroll_pos(saved))
-
-
-# 兼容：lazy_pages.py 中还引用了 ChangelogDetailPage，保留空别名避免 ImportError
-class ChangelogDetailPage(QWidget):
-    """已弃用：详情页现在由 ChangelogPage 内部管理，此类仅作兼容占位。"""
-    backRequested = Signal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)

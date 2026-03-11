@@ -9,7 +9,6 @@ import os
 import random
 import sys
 from dataclasses import dataclass, asdict, field
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from wjx.utils.app.config import DEFAULT_RANDOM_UA_KEYS, USER_AGENT_PRESETS, BROWSER_PREFERENCE
@@ -59,7 +58,6 @@ def get_assets_directory() -> str:
 
 __all__ = [
     "_sanitize_filename",
-    "_select_user_agent_from_keys",
     "_select_user_agent_from_ratios",
     "build_default_config_filename",
     "RuntimeConfig",
@@ -67,7 +65,6 @@ __all__ = [
     "deserialize_question_entry",
     "load_config",
     "save_config",
-    "ConfigPersistenceMixin",
     "get_runtime_directory",
     "get_assets_directory",
 ]
@@ -85,16 +82,6 @@ def _sanitize_filename(value: Optional[str], max_length: int = 80) -> str:
 
 def _filter_valid_user_agent_keys(selected_keys: List[str]) -> List[str]:
     return [key for key in (selected_keys or []) if key in USER_AGENT_PRESETS]
-
-
-def _select_user_agent_from_keys(selected_keys: List[str]) -> Tuple[Optional[str], Optional[str]]:
-    """Randomly pick a UA preset by key and return (ua, label)."""
-    pool = _filter_valid_user_agent_keys(selected_keys)
-    if not pool:
-        return None, None
-    key = random.choice(pool)
-    preset = USER_AGENT_PRESETS.get(key) or {}
-    return preset.get("ua"), preset.get("label")
 
 
 def _select_user_agent_from_ratios(ratios: Dict[str, int]) -> Tuple[Optional[str], Optional[str]]:
@@ -169,7 +156,6 @@ class RuntimeConfig:
     fail_stop_enabled: bool = True
     pause_on_aliyun_captcha: bool = True
     reliability_mode_enabled: bool = True  # 信效度生成总开关
-    reliability_mode_type: str = "simple"  # 兼容旧配置字段：simple/psychometric
     reliability_priority_mode: str = "reliability_first"  # reliability_first/ratio_first
     psycho_target_alpha: float = 0.85  # 心理测量计划目标 Cronbach's Alpha（0.70-0.95）
     headless_mode: bool = True
@@ -454,9 +440,6 @@ def _sanitize_runtime_config_payload(raw: Dict[str, Any]) -> RuntimeConfig:
     config.fail_stop_enabled = bool(raw.get("fail_stop_enabled", True))
     config.pause_on_aliyun_captcha = bool(raw.get("pause_on_aliyun_captcha", True))
     config.reliability_mode_enabled = bool(raw.get("reliability_mode_enabled", True))
-    config.reliability_mode_type = str(raw.get("reliability_mode_type") or "simple")
-    if config.reliability_mode_type not in ("simple", "psychometric"):
-        config.reliability_mode_type = "simple"
     config.reliability_priority_mode = str(raw.get("reliability_priority_mode") or "reliability_first").strip().lower()
     if config.reliability_priority_mode not in ("reliability_first", "ratio_first"):
         config.reliability_priority_mode = "reliability_first"
@@ -687,25 +670,4 @@ def save_config(config: RuntimeConfig, path: Optional[str] = None) -> str:
     with open(config_path, "w", encoding="utf-8") as fp:
         json.dump(payload, fp, ensure_ascii=False, indent=2)
     return config_path
-
-
-class ConfigPersistenceMixin:
-    """
-    兼容层：保留旧调用入口，内部转发到 load_config/save_config。
-    """
-
-    def load_runtime_config(self, path: Optional[str] = None) -> RuntimeConfig:
-        return load_config(path)
-
-    def save_runtime_config(self, config: RuntimeConfig, path: Optional[str] = None) -> str:
-        return save_config(config, path)
-
-    def build_default_config_name(self, survey_title: Optional[str] = None) -> str:
-        title = _sanitize_filename(survey_title or "")
-        if title:
-            return f"{title}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        return f"wjx_config_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-    def get_configs_directory(self) -> str:
-        return _ensure_configs_dir()
 
