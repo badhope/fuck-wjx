@@ -49,6 +49,7 @@ class RandomIPSession:
     user_id: int = 0
     remaining_quota: int = 0
     total_quota: int = 0
+    used_quota: int = 0
     legacy_auth_artifacts: bool = False
 
 
@@ -112,14 +113,46 @@ def _mask_identifier(value: Any, *, keep: int = 6) -> str:
 
 
 def _session_log_fields(session: RandomIPSession) -> str:
+    remaining_quota, total_quota, used_quota = _normalize_quota_state(
+        remaining_quota=session.remaining_quota,
+        total_quota=session.total_quota,
+        used_quota=session.used_quota,
+    )
     return (
         f"state={_session_state_name(session)} "
         f"user_id={int(session.user_id or 0)} "
         f"device={_mask_identifier(session.device_id)} "
-        f"remaining={int(session.remaining_quota or 0)} "
-        f"total={int(session.total_quota or 0)} "
+        f"remaining={remaining_quota} "
+        f"total={total_quota} "
+        f"used={used_quota} "
         f"legacy_auth_artifacts={bool(session.legacy_auth_artifacts)}"
     )
+
+
+def _normalize_quota_state(
+    *,
+    remaining_quota: Any = None,
+    total_quota: Any = None,
+    used_quota: Any = None,
+    default_total_quota: int = 0,
+) -> tuple[int, int, int]:
+    has_remaining = remaining_quota is not None
+    has_used = used_quota is not None
+    remaining = _to_non_negative_int(remaining_quota, 0) if has_remaining else 0
+    total = _to_non_negative_int(total_quota, default_total_quota)
+    if has_used:
+        used = _to_non_negative_int(used_quota, 0)
+        total = max(total, used)
+        remaining = max(0, total - used)
+        return remaining, total, used
+    if has_remaining:
+        total = max(total, remaining)
+        used = max(0, total - remaining)
+        return remaining, total, used
+    total = max(0, total)
+    used = 0
+    remaining = total
+    return remaining, total, used
 
 
 def _log_session_event(level: int, message: str, session: Optional[RandomIPSession] = None, **fields: Any) -> None:
@@ -173,11 +206,21 @@ def _ensure_loaded() -> None:
         loaded_user_id = _to_non_negative_int(settings.value(_settings_key("user_id")), 0)
         loaded_remaining_quota = _to_non_negative_int(settings.value(_settings_key("remaining_quota")), 0)
         loaded_total_quota = _to_non_negative_int(settings.value(_settings_key("total_quota")), loaded_remaining_quota)
+        loaded_used_quota = _to_non_negative_int(
+            settings.value(_settings_key("used_quota")),
+            max(0, loaded_total_quota - loaded_remaining_quota),
+        )
+        normalized_remaining, normalized_total, normalized_used = _normalize_quota_state(
+            remaining_quota=loaded_remaining_quota,
+            total_quota=loaded_total_quota,
+            used_quota=loaded_used_quota,
+        )
         loaded_session = RandomIPSession(
             device_id=device_id,
             user_id=loaded_user_id,
-            remaining_quota=loaded_remaining_quota,
-            total_quota=max(loaded_total_quota, loaded_remaining_quota),
+            remaining_quota=normalized_remaining,
+            total_quota=normalized_total,
+            used_quota=normalized_used,
             legacy_auth_artifacts=bool(legacy_auth_detected and not _is_valid_user_id(loaded_user_id)),
         )
         _session = loaded_session
@@ -208,6 +251,7 @@ def _persist_session_locked() -> None:
     settings.setValue(_settings_key("user_id"), int(_session.user_id or 0))
     settings.setValue(_settings_key("remaining_quota"), int(_session.remaining_quota or 0))
     settings.setValue(_settings_key("total_quota"), int(_session.total_quota or 0))
+    settings.setValue(_settings_key("used_quota"), int(_session.used_quota or 0))
     settings.remove(_settings_key("refresh_expires_at"))
     settings.remove(_settings_key(_REFRESH_TOKEN_BACKUP_KEY))
     settings.sync()
@@ -222,6 +266,7 @@ def _verify_persisted_session(session: RandomIPSession) -> None:
     expected_user_id = int(session.user_id or 0)
     expected_remaining_quota = int(session.remaining_quota or 0)
     expected_total_quota = int(session.total_quota or 0)
+    expected_used_quota = int(session.used_quota or 0)
 
     persisted_device_id = str(settings.value(_settings_key("device_id")) or "").strip()
     if persisted_device_id != expected_device_id:
@@ -238,6 +283,10 @@ def _verify_persisted_session(session: RandomIPSession) -> None:
     persisted_total_quota = _to_non_negative_int(settings.value(_settings_key("total_quota")), -1)
     if persisted_total_quota != expected_total_quota:
         failures.append("settings.total_quota")
+
+    persisted_used_quota = _to_non_negative_int(settings.value(_settings_key("used_quota")), -1)
+    if persisted_used_quota != expected_used_quota:
+        failures.append("settings.used_quota")
 
     persisted_refresh_expires_at = str(settings.value(_settings_key("refresh_expires_at")) or "").strip()
     if persisted_refresh_expires_at:
@@ -265,10 +314,16 @@ def _set_session(new_session: RandomIPSession, *, verify_auth_persistence: bool 
     with _session_lock:
         _ensure_loaded()
         previous_session = _session
+        normalized_remaining, normalized_total, normalized_used = _normalize_quota_state(
+            remaining_quota=new_session.remaining_quota,
+            total_quota=new_session.total_quota,
+            used_quota=new_session.used_quota,
+        )
         candidate = replace(
             new_session,
-            total_quota=max(int(new_session.total_quota or 0), int(new_session.remaining_quota or 0)),
-            remaining_quota=max(0, int(new_session.remaining_quota or 0)),
+            remaining_quota=normalized_remaining,
+            total_quota=normalized_total,
+            used_quota=normalized_used,
             legacy_auth_artifacts=bool(new_session.legacy_auth_artifacts and not _is_valid_user_id(new_session.user_id)),
         )
         _session = candidate
@@ -288,18 +343,26 @@ def _read_session() -> RandomIPSession:
         return replace(_session)
 
 
-def _update_quota(remaining_quota: int, total_hint: Optional[int] = None) -> RandomIPSession:
+def _update_quota(
+    remaining_quota: int,
+    total_hint: Optional[int] = None,
+    *,
+    used_hint: Optional[int] = None,
+) -> RandomIPSession:
     global _session
     with _session_lock:
         _ensure_loaded()
-        total_quota = int(_session.total_quota or 0)
-        if total_hint is not None:
-            total_quota = max(total_quota, int(total_hint))
-        total_quota = max(total_quota, int(remaining_quota))
+        remaining, total_quota, used_quota = _normalize_quota_state(
+            remaining_quota=remaining_quota,
+            total_quota=total_hint if total_hint is not None else _session.total_quota,
+            used_quota=used_hint,
+            default_total_quota=int(_session.total_quota or 0),
+        )
         session = replace(
             _session,
-            remaining_quota=max(0, int(remaining_quota)),
+            remaining_quota=remaining,
             total_quota=total_quota,
+            used_quota=used_quota,
         )
         _session = session
         _persist_session_locked()
@@ -321,6 +384,7 @@ def clear_session(*, reason: str = "unspecified") -> None:
         settings.remove(_settings_key("user_id"))
         settings.remove(_settings_key("remaining_quota"))
         settings.remove(_settings_key("total_quota"))
+        settings.remove(_settings_key("used_quota"))
         settings.remove(_settings_key(_REFRESH_TOKEN_BACKUP_KEY))
         settings.remove(_settings_key("refresh_expires_at"))
         settings.sync()
@@ -346,12 +410,14 @@ def recover_incomplete_session() -> RandomIPSession:
 
 def get_session_snapshot() -> Dict[str, Any]:
     session = _read_session()
+    quota = _build_quota_snapshot(session)
     return {
         "authenticated": _has_complete_session(session),
         "device_id": session.device_id,
         "user_id": int(session.user_id or 0),
-        "remaining_quota": int(session.remaining_quota),
-        "total_quota": int(session.total_quota),
+        "remaining_quota": int(quota["remaining_quota"]),
+        "total_quota": int(quota["total_quota"]),
+        "used_quota": int(quota["used_quota"]),
         "has_access_token": False,
         "has_refresh_token": False,
         "has_valid_user_id": _is_valid_user_id(session.user_id),
@@ -360,10 +426,32 @@ def get_session_snapshot() -> Dict[str, Any]:
     }
 
 
+def has_unknown_local_quota(snapshot: Optional[Dict[str, Any]] = None) -> bool:
+    """判断本地已用/总额度缓存是否处于明显异常的未知状态。"""
+    payload = snapshot if isinstance(snapshot, dict) else get_session_snapshot()
+    if not bool(payload.get("authenticated")):
+        return False
+    user_id = _to_non_negative_int(payload.get("user_id"), 0)
+    total_quota = _to_non_negative_int(payload.get("total_quota"), 0)
+    used_quota = _to_non_negative_int(payload.get("used_quota"), 0)
+    return user_id > 0 and total_quota <= 0 and used_quota <= 0
+
+
+def is_quota_exhausted(snapshot: Optional[Dict[str, Any]] = None) -> bool:
+    payload = snapshot if isinstance(snapshot, dict) else get_session_snapshot()
+    if not bool(payload.get("authenticated")):
+        return False
+    total_quota = _to_non_negative_int(payload.get("total_quota"), 0)
+    used_quota = _to_non_negative_int(payload.get("used_quota"), 0)
+    return total_quota > 0 and used_quota >= total_quota
+
+
 def _build_quota_snapshot(session: RandomIPSession) -> Dict[str, int]:
-    total_quota = max(0, int(session.total_quota or 0))
-    remaining_quota = max(0, int(session.remaining_quota or 0))
-    used_quota = max(0, total_quota - remaining_quota)
+    remaining_quota, total_quota, used_quota = _normalize_quota_state(
+        remaining_quota=session.remaining_quota,
+        total_quota=session.total_quota,
+        used_quota=session.used_quota,
+    )
     return {
         "used_quota": used_quota,
         "total_quota": total_quota,
@@ -420,7 +508,7 @@ def format_random_ip_error(exc: BaseException) -> str:
     if detail == "invalid_area":
         return "指定地区无效，请重新选择地区后再试"
     if detail == "insufficient_quota":
-        return "随机IP额度不足，请先补充额度"
+        return "随机IP已用额度已达到上限，请先补充额度"
     if detail == "token_rate_limited":
         return "当前账号请求过于频繁，请稍后再试"
     if detail == "device_rate_limited":
@@ -572,14 +660,18 @@ def _parse_session_payload(
             ",".join(sorted(str(k) for k in data.keys())),
         )
         raise RandomIPAuthError("invalid_response:user_id_invalid")
+    normalized_remaining, normalized_total, normalized_used = _normalize_quota_state(
+        remaining_quota=data.get("remaining_quota"),
+        total_quota=data.get("total_quota", fallback.total_quota),
+        used_quota=data.get("used_quota", fallback.used_quota),
+        default_total_quota=fallback.total_quota,
+    )
     session = RandomIPSession(
         device_id=device_id,
         user_id=_require_valid_user_id(raw_user_id),
-        remaining_quota=_to_non_negative_int(data.get("remaining_quota"), fallback.remaining_quota),
-        total_quota=max(
-            _to_non_negative_int(data.get("total_quota"), fallback.total_quota),
-            _to_non_negative_int(data.get("remaining_quota"), fallback.remaining_quota),
-        ),
+        remaining_quota=normalized_remaining,
+        total_quota=normalized_total,
+        used_quota=normalized_used,
     )
     return session
 
@@ -628,8 +720,13 @@ def _require_authenticated_session() -> RandomIPSession:
     raise RandomIPAuthError("not_authenticated")
 
 
-def update_remaining_quota(remaining_quota: int, *, total_hint: Optional[int] = None) -> RandomIPSession:
-    return _update_quota(max(0, int(remaining_quota or 0)), total_hint=total_hint)
+def update_remaining_quota(
+    remaining_quota: int,
+    *,
+    total_hint: Optional[int] = None,
+    used_hint: Optional[int] = None,
+) -> RandomIPSession:
+    return _update_quota(max(0, int(remaining_quota or 0)), total_hint=total_hint, used_hint=used_hint)
 
 
 def _extract_proxy_item(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -662,12 +759,14 @@ def _parse_single_extract_payload(
     remaining_quota = _to_non_negative_int(data.get("remaining_quota"), 0)
     quota_cost = _to_non_negative_int(data.get("quota_cost"), 0)
     total_quota = _to_non_negative_int(data.get("total_quota"), remaining_quota + quota_cost)
-    update_remaining_quota(remaining_quota, total_hint=total_quota)
+    used_quota = data.get("used_quota")
+    session = update_remaining_quota(remaining_quota, total_hint=total_quota, used_hint=used_quota)
     item.update(
         {
             "quota_cost": quota_cost,
-            "remaining_quota": remaining_quota,
-            "total_quota": total_quota,
+            "remaining_quota": int(session.remaining_quota),
+            "total_quota": int(session.total_quota),
+            "used_quota": int(session.used_quota),
         }
     )
     return item
@@ -701,13 +800,15 @@ def _parse_batch_extract_payload(
     quota_cost_total = _to_non_negative_int(data.get("quota_cost_total"), 0)
     remaining_quota = _to_non_negative_int(data.get("remaining_quota"), 0)
     total_quota = _to_non_negative_int(data.get("total_quota"), remaining_quota + quota_cost_total)
-    update_remaining_quota(remaining_quota, total_hint=total_quota)
+    used_quota = data.get("used_quota")
+    session = update_remaining_quota(remaining_quota, total_hint=total_quota, used_hint=used_quota)
     return {
         "items": items,
         "requested_count": requested_count,
         "returned_count": min(returned_count, len(items)),
-        "remaining_quota": remaining_quota,
-        "total_quota": total_quota,
+        "remaining_quota": int(session.remaining_quota),
+        "total_quota": int(session.total_quota),
+        "used_quota": int(session.used_quota),
         "quota_cost_total": quota_cost_total,
     }
 
@@ -767,14 +868,42 @@ def get_fresh_quota_snapshot() -> Dict[str, int]:
     return _build_quota_snapshot(_require_authenticated_session())
 
 
+def sync_quota_snapshot_from_server() -> Dict[str, int]:
+    session = _require_authenticated_session()
+    logging.info(
+        "随机IP额度服务端同步开始：endpoint=%s user_id=%s",
+        _endpoint_name(AUTH_TRIAL_ENDPOINT),
+        int(session.user_id or 0),
+    )
+    response = _post_json(AUTH_TRIAL_ENDPOINT, json_body={})
+    if int(getattr(response, "status_code", 0) or 0) != 200:
+        error = _extract_error_payload(response)
+        logging.warning(
+            "随机IP额度服务端同步失败：endpoint=%s status=%s detail=%s",
+            _endpoint_name(AUTH_TRIAL_ENDPOINT),
+            int(getattr(response, "status_code", 0) or 0),
+            error.detail,
+        )
+        raise error
+    refreshed = _parse_session_response(response, fallback_session=session)
+    persisted = _set_session(refreshed, verify_auth_persistence=True)
+    _log_session_event(logging.INFO, "随机IP额度已与服务端同步", persisted)
+    return _build_quota_snapshot(persisted)
+
+
 def _apply_quota_payload(data: Dict[str, Any]) -> RandomIPSession:
     session = _read_session()
-    remaining_quota = _to_non_negative_int(data.get("remaining_quota"), session.remaining_quota)
-    total_quota = _to_non_negative_int(data.get("total_quota"), session.total_quota)
+    normalized_remaining, normalized_total, normalized_used = _normalize_quota_state(
+        remaining_quota=data.get("remaining_quota"),
+        total_quota=data.get("total_quota", session.total_quota),
+        used_quota=data.get("used_quota", session.used_quota),
+        default_total_quota=session.total_quota,
+    )
     updated = replace(
         session,
-        remaining_quota=remaining_quota,
-        total_quota=max(total_quota, remaining_quota),
+        remaining_quota=normalized_remaining,
+        total_quota=normalized_total,
+        used_quota=normalized_used,
     )
     return _set_session(updated)
 
@@ -805,6 +934,7 @@ def claim_easter_egg_bonus() -> Dict[str, Any]:
         "claimed": claimed,
         "bonus_quota": bonus_quota,
         "detail": detail,
+        "used_quota": int(session.used_quota),
         "remaining_quota": int(session.remaining_quota),
         "total_quota": int(session.total_quota),
     }

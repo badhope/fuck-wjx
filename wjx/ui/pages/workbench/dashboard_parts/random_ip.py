@@ -7,7 +7,13 @@ from typing import TYPE_CHECKING, Any, Optional
 from PySide6.QtWidgets import QDialog
 from qfluentwidgets import FluentIcon
 
-from wjx.network.proxy.auth import has_authenticated_session, has_incomplete_session
+from wjx.network.proxy.auth import (
+    get_session_snapshot,
+    has_authenticated_session,
+    has_incomplete_session,
+    has_unknown_local_quota,
+    is_quota_exhausted,
+)
 from wjx.network.proxy import (
     _format_status_payload,
     get_proxy_minute_by_answer_seconds,
@@ -79,11 +85,15 @@ class DashboardRandomIPMixin:
             log_suppressed_exception("set_random_ip_loading runtime", exc, level=logging.WARNING)
 
     def update_random_ip_counter(self, count: int, limit: int, custom_api: bool):
-        authenticated = has_authenticated_session()
-        session_incomplete = has_incomplete_session()
+        snapshot = get_session_snapshot()
+        authenticated = bool(snapshot.get("authenticated")) and has_authenticated_session()
+        session_incomplete = bool(snapshot.get("session_incomplete")) and has_incomplete_session()
+        unknown_local_quota = has_unknown_local_quota(snapshot)
         used = max(0, int(count or 0))
         total = max(0, int(limit or 0))
-        remaining = max(0, total - used)
+        quota_exhausted = is_quota_exhausted(
+            {"authenticated": authenticated, "user_id": int(snapshot.get("user_id") or 0), "used_quota": used, "total_quota": total}
+        )
         self.card_btn.setEnabled(True)
         self.card_btn.setText("申请额度")
         self.card_btn.setIcon(FluentIcon.FINGERPRINT)
@@ -116,14 +126,21 @@ class DashboardRandomIPMixin:
             self._update_ip_low_infobar(count, limit, custom_api)
             self._update_ip_cost_infobar(custom_api)
             return
+        if unknown_local_quota:
+            self.random_ip_hint.setText("待校验")
+            self.random_ip_hint.setStyleSheet("color:#D46B08;")
+            self.card_btn.setToolTip("本机还记得随机IP账号，但已用/总额度缓存已经坏成 0/0 了。后续真实提取代理时会自动尝试回填。")
+            self._update_ip_low_infobar(count, limit, custom_api)
+            self._update_ip_cost_infobar(custom_api)
+            return
         self.random_ip_hint.setText(f"{used}/{total}")
-        if remaining <= 0:
+        if quota_exhausted:
             self.random_ip_hint.setStyleSheet("color:red;")
         else:
             self.random_ip_hint.setStyleSheet("color:#6b6b6b;")
         self._update_ip_low_infobar(count, limit, custom_api)
         self._update_ip_cost_infobar(custom_api)
-        if remaining <= 0 and self.random_ip_cb.isChecked():
+        if quota_exhausted and self.random_ip_cb.isChecked():
             self.random_ip_cb.blockSignals(True)
             self.random_ip_cb.setChecked(False)
             self.random_ip_cb.blockSignals(False)

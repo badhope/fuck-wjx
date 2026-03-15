@@ -10,6 +10,7 @@ from wjx.utils.app.config import (
     PROXY_POOL_QUALITY,
     PROXY_QUOTA_COST_MAP,
     PROXY_SOURCE_DEFAULT,
+    PROXY_TTL_GRACE_SECONDS,
 )
 
 _config_lock = threading.Lock()
@@ -57,8 +58,13 @@ def _map_answer_seconds_to_proxy_minute(total_seconds: int) -> int:
     return 30
 
 
+def get_proxy_required_seconds_by_answer_seconds(total_seconds: int) -> int:
+    return max(0, int(total_seconds)) + int(PROXY_TTL_GRACE_SECONDS)
+
+
 def get_proxy_minute_by_answer_seconds(total_seconds: int) -> int:
-    minute = int(_map_answer_seconds_to_proxy_minute(total_seconds))
+    required_seconds = get_proxy_required_seconds_by_answer_seconds(total_seconds)
+    minute = int(_map_answer_seconds_to_proxy_minute(required_seconds))
     if minute not in PROXY_MINUTE_OPTIONS:
         return 1
     return minute
@@ -78,9 +84,16 @@ def set_proxy_occupy_minute_by_answer_duration(answer_duration_range_seconds: Op
         max_seconds = _to_non_negative_int(answer_duration_range_seconds[1], min_seconds) if len(answer_duration_range_seconds) >= 2 else min_seconds
     max_seconds = max(max_seconds, min_seconds)
     minute = get_proxy_minute_by_answer_seconds(max_seconds)
+    required_seconds = get_proxy_required_seconds_by_answer_seconds(max_seconds)
     with _config_lock:
         _proxy_occupy_minute = minute
-    logging.debug("已根据作答时长更新代理 minute=%s（min=%s秒, max=%s秒）", minute, min_seconds, max_seconds)
+    logging.debug(
+        "已根据作答时长更新代理 minute=%s（min=%s秒, max=%s秒, ttl=%s秒）",
+        minute,
+        min_seconds,
+        max_seconds,
+        required_seconds,
+    )
     return minute
 
 

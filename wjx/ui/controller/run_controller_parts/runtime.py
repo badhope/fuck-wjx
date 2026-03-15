@@ -16,8 +16,11 @@ from wjx.network.proxy.auth import (
     RandomIPAuthError,
     format_random_ip_error,
     get_fresh_quota_snapshot,
+    get_session_snapshot,
     has_authenticated_session,
     has_incomplete_session,
+    has_unknown_local_quota,
+    is_quota_exhausted,
 )
 from wjx.network.proxy import (
     get_effective_proxy_api_url,
@@ -310,15 +313,18 @@ class RunControllerRuntimeMixin:
         if not is_custom_proxy_api_active():
             if not has_authenticated_session() and not has_incomplete_session():
                 raise RuntimeError("默认随机IP需要先领取免费试用或提交额度申请，请先完成后再试，或改用自定义代理接口")
-            _set_stage("初始化随机IP模块（同步额度）")
+            _set_stage("初始化随机IP模块（检查本地额度缓存）")
             try:
-                remaining = int(get_fresh_quota_snapshot()["remaining_quota"])
+                snapshot = get_fresh_quota_snapshot()
             except RandomIPAuthError as exc:
                 raise RuntimeError(format_random_ip_error(exc)) from exc
             except Exception as exc:
-                raise RuntimeError(f"同步随机IP额度失败：{exc}") from exc
-            if remaining <= 0:
-                raise RuntimeError("随机IP剩余额度不足，请补充额度后再试，或改用自定义代理接口")
+                raise RuntimeError(f"读取随机IP本地额度缓存失败：{exc}") from exc
+            session_snapshot = get_session_snapshot()
+            if is_quota_exhausted({**snapshot, "authenticated": True}) and not has_unknown_local_quota(session_snapshot):
+                raise RuntimeError("随机IP已用额度已达到上限，请补充额度后再试，或改用自定义代理接口")
+            if has_unknown_local_quota(session_snapshot):
+                logging.warning("检测到随机IP本地已用/总额度缓存异常：user_id 已存在，但额度缓存仍为 0/0；继续预取代理以触发真实额度回填")
             if _cancelled():
                 return []
 

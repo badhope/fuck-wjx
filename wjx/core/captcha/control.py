@@ -55,7 +55,7 @@ def _trigger_aliyun_captcha_stop(
             
             # 先检查当前随机IP状态和配额情况
             from wjx.network.proxy import get_random_ip_counter_snapshot_local
-            from wjx.network.proxy.auth import has_authenticated_session
+            from wjx.network.proxy.auth import has_authenticated_session, is_quota_exhausted
             
             var = getattr(gui_instance, "random_ip_enabled_var", None) if gui_instance else None
             is_enabled = bool(var.get() if var and hasattr(var, "get") else False)
@@ -96,14 +96,15 @@ def _trigger_aliyun_captcha_stop(
                     log_popup_warning("智能验证提示", message)
                 return
 
-            remaining = max(0, int(total or 0) - int(used or 0))
-            quota_exceeded = remaining <= 0
+            quota_exceeded = is_quota_exhausted(
+                {"authenticated": True, "used_quota": int(used or 0), "total_quota": int(total or 0)}
+            )
             
             # 根据配额情况构建不同的提示消息
             if quota_exceeded:
                 message = (
                     "检测到阿里云智能验证，为避免继续失败提交已停止所有任务。\n\n"
-                    "建议启用随机 IP，但当前随机IP剩余额度不足。\n"
+                    "建议启用随机 IP，但当前随机IP已用额度已达到上限。\n"
                     "请先补充额度后再启用随机 IP。"
                 )
                 if gui_instance and hasattr(gui_instance, "_log_popup_warning"):

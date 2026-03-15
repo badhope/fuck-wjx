@@ -17,8 +17,10 @@ from wjx.network.proxy.auth import (
     get_session_snapshot,
     has_authenticated_session,
     has_incomplete_session,
+    is_quota_exhausted,
     load_session_for_startup,
     recover_incomplete_session,
+    sync_quota_snapshot_from_server,
 )
 from wjx.network.proxy.quota import get_random_ip_counter_snapshot_local
 from wjx.utils.logging.log_utils import (
@@ -225,6 +227,7 @@ def _open_quota_request_dialog(gui: Any, default_type: str = "额度申请") -> 
 
 
 def on_random_ip_toggle(gui: Any) -> None:
+    global _counter_refresh_cache
     from wjx.network.proxy.source import is_custom_proxy_api_active
 
     if gui is None:
@@ -243,12 +246,14 @@ def on_random_ip_toggle(gui: Any) -> None:
         if not activated:
             _set_random_ip_enabled(gui, False)
             return
+    local_used, local_total, local_custom_api = get_random_ip_counter_snapshot_local()
+    _apply_counter_snapshot_to_gui(gui, used=local_used, total=local_total, custom_api=local_custom_api)
     try:
         snapshot = _run_with_loading_dialog(
             gui,
             title="随机IP校验中",
-            message="正在校验额度...",
-            worker=get_fresh_quota_snapshot,
+            message="正在同步服务端额度...",
+            worker=sync_quota_snapshot_from_server,
         )
     except Exception as exc:
         message = format_random_ip_error(exc)
@@ -259,9 +264,12 @@ def on_random_ip_toggle(gui: Any) -> None:
         except Exception as refresh_exc:
             log_suppressed_exception("on_random_ip_toggle refresh counter", refresh_exc)
         return
-    remaining = int(snapshot["remaining_quota"])
-    if remaining <= 0:
-        _invoke_popup(gui, "warning", "提示", "随机IP额度不足，请先补充额度后再启用。")
+    used_quota = int(snapshot.get("used_quota") or 0)
+    total_quota = int(snapshot.get("total_quota") or 0)
+    _counter_refresh_cache = (used_quota, total_quota, time.monotonic())
+    _apply_counter_snapshot_to_gui(gui, used=used_quota, total=total_quota, custom_api=False)
+    if is_quota_exhausted({"authenticated": True, **snapshot}):
+        _invoke_popup(gui, "warning", "提示", "随机IP已用额度已达到上限，请先补充额度后再启用。")
         _set_random_ip_enabled(gui, False)
         return
     if confirm_random_ip_usage(gui):
@@ -289,12 +297,14 @@ def _try_activate_trial(gui: Any = None) -> tuple[bool, bool]:
         _invoke_popup(gui, "error", "领取试用失败", f"领取试用失败：{exc}")
         return False, False
 
-    quota_left = max(0, int(session.remaining_quota or 0))
-    total_quota = max(int(session.total_quota or 0), quota_left)
-    used_quota = max(0, total_quota - quota_left)
+    total_quota = max(int(session.total_quota or 0), 0)
+    used_quota = max(0, int(session.used_quota or 0))
     _counter_refresh_cache = (used_quota, total_quota, time.monotonic())
     _apply_counter_snapshot_to_gui(gui, used=used_quota, total=total_quota, custom_api=False)
-    _invoke_popup(gui, "info", "试用已领取", f"已领取免费试用，随机IP剩余额度：{quota_left}。")
+    if total_quota > 0:
+        _invoke_popup(gui, "info", "试用已领取", f"已领取免费试用，当前随机IP已用/总额度：{used_quota}/{total_quota}。")
+    else:
+        _invoke_popup(gui, "info", "试用已领取", "已领取免费试用，随机IP账号已绑定到当前设备。")
     return True, False
 
 

@@ -243,9 +243,8 @@ def _check_minute_conflict(url: str) -> Optional[str]:
     if minute is None:
         return "建议在自定义API地址中添加 minute 参数（如 &minute=5）以确保代理时长足够"
     occupy_minute = get_proxy_occupy_minute()
-    max_seconds = occupy_minute * 60
-    if minute * 60 < max_seconds:
-        return f"代理时长 ({minute}分钟) 小于最大作答时长 ({max_seconds}秒 ≈ {max_seconds/60:.1f}分钟)，可能导致作答过程中代理失效"
+    if minute < occupy_minute:
+        return f"代理时长 ({minute}分钟) 小于当前建议值 ({occupy_minute}分钟，已含安全缓冲)，可能导致作答过程中代理失效"
     return None
 
 

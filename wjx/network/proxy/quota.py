@@ -6,6 +6,8 @@ from wjx.network.proxy.auth import (
     get_session_snapshot,
     has_authenticated_session,
     has_incomplete_session,
+    has_unknown_local_quota,
+    is_quota_exhausted,
 )
 
 
@@ -39,5 +41,7 @@ def normalize_random_ip_enabled_value(desired_enabled: bool) -> bool:
         return True
     if not has_authenticated_session():
         return False
-    snapshot = get_quota_snapshot()
-    return int(snapshot["remaining_quota"]) > 0
+    snapshot = get_session_snapshot()
+    if has_unknown_local_quota(snapshot):
+        return True
+    return not is_quota_exhausted(snapshot)
