@@ -5,10 +5,11 @@ from wjx.utils.logging.log_utils import log_suppressed_exception
 
 
 from PySide6.QtCore import QObject, Qt, QThread
-from PySide6.QtWidgets import QSizePolicy, QPlainTextEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import (
     ComboBox,
     EditableComboBox,
+    ExpandGroupSettingCard,
     FluentIcon,
     IndeterminateProgressRing,
     InfoBar,
@@ -17,6 +18,7 @@ from qfluentwidgets import (
     HyperlinkButton,
     LineEdit,
     PasswordLineEdit,
+    PlainTextEdit,
     PushSettingCard,
     SettingCard,
     SettingCardGroup,
@@ -34,7 +36,42 @@ from wjx.utils.integrations.ai_service import (
 from wjx.utils.io.load_save import RuntimeConfig
 
 
+class AIPromptSettingCard(ExpandGroupSettingCard):
+    """AI 系统提示词展开卡。"""
+
+    def __init__(self, prompt_text: str, parent=None):
+        super().__init__(
+            FluentIcon.EDIT,
+            "系统提示词",
+            "在此处编辑 AI 填空的系统提示词",
+            parent,
+        )
+
+        self._group_container = QWidget(self)
+        layout = QVBoxLayout(self._group_container)
+        layout.setContentsMargins(48, 12, 48, 16)
+        layout.setSpacing(8)
+
+        self.promptEdit = PlainTextEdit(self._group_container)
+        self.promptEdit.setPlaceholderText("留空使用默认提示词...")
+        self.promptEdit.setMinimumHeight(132)
+        self.promptEdit.setMaximumHeight(180)
+        self.promptEdit.setPlainText(prompt_text or DEFAULT_SYSTEM_PROMPT)
+
+        layout.addWidget(self.promptEdit)
+
+        self.addGroupWidget(self._group_container)
+        self.setExpand(True)
+
+    def prompt_text(self) -> str:
+        return self.promptEdit.toPlainText().strip() or DEFAULT_SYSTEM_PROMPT
+
+    def set_prompt_text(self, value: str) -> None:
+        self.promptEdit.setPlainText((value or "").strip() or DEFAULT_SYSTEM_PROMPT)
+
+
 class RuntimeAISection(QObject):
+
     _PROVIDER_DOCS = {
         "deepseek": "https://api-docs.deepseek.com/zh-cn/",
         "qwen": "https://help.aliyun.com/zh/model-studio/get-api-key",
@@ -179,23 +216,7 @@ class RuntimeAISection(QObject):
             )
             self.ai_test_card.hBoxLayout.insertSpacing(insert_index + 1, 6)
 
-        self.ai_prompt_card = SettingCard(
-            FluentIcon.EDIT,
-            "系统提示词",
-            "自定义 AI 填空的系统提示词（留空使用默认）",
-            self.group,
-        )
-        self.ai_prompt_edit = QPlainTextEdit(self.ai_prompt_card)
-        self.ai_prompt_edit.setPlaceholderText("留空使用默认提示词...")
-        self.ai_prompt_edit.setPlainText(self._ai_system_prompt)
-        self.ai_prompt_edit.setMaximumHeight(100)
-        self.ai_prompt_edit.setMinimumHeight(80)
-        prompt_container = QWidget(self.ai_prompt_card)
-        prompt_layout = QVBoxLayout(prompt_container)
-        prompt_layout.setContentsMargins(0, 0, 0, 0)
-        prompt_layout.addWidget(self.ai_prompt_edit)
-        self.ai_prompt_card.hBoxLayout.addWidget(prompt_container, 1)
-        self.ai_prompt_card.hBoxLayout.addSpacing(16)
+        self.ai_prompt_card = AIPromptSettingCard(self._ai_system_prompt, self.group)
         self.group.addSettingCard(self.ai_prompt_card)
 
     def bind_to_layout(self, layout):
@@ -209,7 +230,7 @@ class RuntimeAISection(QObject):
         self.ai_model_combo.currentTextChanged.connect(self._on_ai_model_changed)
         self.ai_model_edit.editingFinished.connect(self._on_ai_model_edit_changed)
         self.ai_test_card.clicked.connect(self._on_ai_test_clicked)
-        self.ai_prompt_edit.textChanged.connect(self._on_ai_prompt_changed)
+        self.ai_prompt_card.promptEdit.textChanged.connect(self._on_ai_prompt_changed)
 
     def update_config(self, cfg: RuntimeConfig):
         cfg.ai_enabled = bool(self.ai_enabled_card.switchButton.isChecked())
@@ -348,7 +369,7 @@ class RuntimeAISection(QObject):
             self.ai_model_combo.setText(current_model)
             self.ai_model_edit.setText(current_model)
         self._ai_system_prompt = cfg.ai_system_prompt or DEFAULT_SYSTEM_PROMPT
-        self.ai_prompt_edit.setPlainText(self._ai_system_prompt)
+        self.ai_prompt_card.set_prompt_text(self._ai_system_prompt)
         self._update_ai_visibility()
         self._set_ai_controls_blocked(False)
         self._ai_loading = False
@@ -438,7 +459,7 @@ class RuntimeAISection(QObject):
         """系统提示词变化"""
         if self._ai_loading:
             return
-        self._ai_system_prompt = self.ai_prompt_edit.toPlainText().strip() or DEFAULT_SYSTEM_PROMPT
+        self._ai_system_prompt = self.ai_prompt_card.prompt_text()
         save_ai_settings(system_prompt=self._ai_system_prompt)
 
     def _on_ai_test_clicked(self):
