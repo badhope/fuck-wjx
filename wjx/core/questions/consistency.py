@@ -17,7 +17,6 @@ _QUESTION_TYPE_LABELS = {
     "4": "多选题",
     "5": "量表题",
     "6": "矩阵题",
-    "7": "下拉题",
 }
 
 
@@ -95,7 +94,7 @@ def sanitize_answer_rules(
     questions_info: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
     """清洗规则，并在提供题目信息时移除已不再受支持的题型规则。"""
-    stats = {"invalid": 0, "dropdown": 0, "unsupported": 0}
+    stats = {"invalid": 0, "unsupported": 0}
     sanitized: List[Dict[str, Any]] = []
     question_map = _build_question_info_map(questions_info)
     has_question_info = bool(question_map)
@@ -110,11 +109,6 @@ def sanitize_answer_rules(
             target_info = question_map.get(normalized["target_question_num"])
             if not condition_info or not target_info:
                 stats["unsupported"] += 1
-                continue
-            condition_type = _normalize_question_type_code(condition_info.get("type_code"))
-            target_type = _normalize_question_type_code(target_info.get("type_code"))
-            if condition_type == "7" or target_type == "7":
-                stats["dropdown"] += 1
                 continue
             if not question_supports_answer_rule(condition_info) or not question_supports_answer_rule(target_info):
                 stats["unsupported"] += 1

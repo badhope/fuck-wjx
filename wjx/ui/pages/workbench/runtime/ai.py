@@ -25,7 +25,12 @@ from qfluentwidgets import (
 from wjx.ui.widgets.full_width_infobar import FullWidthInfoBar
 from wjx.ui.workers.ai_test_worker import AITestWorker
 from wjx.ui.widgets.setting_cards import SwitchSettingCard
-from wjx.utils.integrations.ai_service import AI_PROVIDERS, DEFAULT_SYSTEM_PROMPT, get_ai_settings, save_ai_settings
+from wjx.utils.integrations.ai_service import (
+    AI_PROVIDERS,
+    DEFAULT_SYSTEM_PROMPT,
+    get_ai_settings,
+    save_ai_settings,
+)
 from wjx.utils.io.load_save import RuntimeConfig
 
 
@@ -103,12 +108,12 @@ class RuntimeAISection(QObject):
         self.ai_baseurl_card = SettingCard(
             FluentIcon.LINK,
             "Base URL",
-            "自定义模式下的 API 地址（如 https://api.example.com/v1）",
+            "自定义模式下可填根地址或完整端点，程序会自动识别协议（如 https://api.example.com/v1）",
             self.group,
         )
         self.ai_baseurl_edit = LineEdit(self.ai_baseurl_card)
         self.ai_baseurl_edit.setMinimumWidth(280)
-        self.ai_baseurl_edit.setPlaceholderText("https://api.example.com/v1")
+        self.ai_baseurl_edit.setPlaceholderText("https://api.example.com/v1 或完整端点")
         self.ai_baseurl_edit.setText(ai_config.get("base_url") or "")
         self.ai_baseurl_card.hBoxLayout.addWidget(self.ai_baseurl_edit, 0, Qt.AlignmentFlag.AlignRight)
         self.ai_baseurl_card.hBoxLayout.addSpacing(16)
@@ -212,6 +217,7 @@ class RuntimeAISection(QObject):
         cfg.ai_provider = str(self.ai_provider_combo.itemData(idx)) if idx >= 0 else "deepseek"
         cfg.ai_api_key = self.ai_apikey_edit.text().strip()
         cfg.ai_base_url = self.ai_baseurl_edit.text().strip()
+        cfg.ai_api_protocol = "auto"
         cfg.ai_model = self._get_current_model_value()
         cfg.ai_system_prompt = self._ai_system_prompt or DEFAULT_SYSTEM_PROMPT
 
@@ -317,10 +323,13 @@ class RuntimeAISection(QObject):
             cfg.ai_provider = str(ai_config.get("provider") or "deepseek")
             cfg.ai_api_key = str(ai_config.get("api_key") or "")
             cfg.ai_base_url = str(ai_config.get("base_url") or "")
+            cfg.ai_api_protocol = str(ai_config.get("api_protocol") or "auto")
             cfg.ai_model = str(ai_config.get("model") or "")
             cfg.ai_system_prompt = str(ai_config.get("system_prompt") or DEFAULT_SYSTEM_PROMPT)
         if not getattr(cfg, "ai_provider", ""):
             cfg.ai_provider = "deepseek"
+        if not getattr(cfg, "ai_api_protocol", ""):
+            cfg.ai_api_protocol = "auto"
         if not getattr(cfg, "ai_system_prompt", ""):
             cfg.ai_system_prompt = DEFAULT_SYSTEM_PROMPT
 
@@ -349,6 +358,7 @@ class RuntimeAISection(QObject):
             provider=cfg.ai_provider,
             api_key=cfg.ai_api_key or "",
             base_url=cfg.ai_base_url or "",
+            api_protocol="auto",
             model=cfg.ai_model or "",
             system_prompt=self._ai_system_prompt,
         )
@@ -441,6 +451,7 @@ class RuntimeAISection(QObject):
             enabled=True,
             api_key=self.ai_apikey_edit.text(),
             base_url=self.ai_baseurl_edit.text(),
+            api_protocol="auto",
             model=self._get_current_model_value(),
             system_prompt=self._ai_system_prompt,
         )

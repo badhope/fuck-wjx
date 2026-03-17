@@ -34,7 +34,7 @@ from wjx.core.questions.consistency import (
 )
 
 
-_ALLOWED_TYPE_CODES = {"3", "4", "5", "6"}  # 单选 / 多选 / 量表 / 矩阵
+_ALLOWED_TYPE_CODES = {"3", "4", "5", "6"}  # 单选 / 多选 / 量表(含评价) / 矩阵
 _TYPE_CODE_LABELS = {"3": "单选题", "4": "多选题", "5": "量表题", "6": "矩阵题"}
 _CONDITION_MODE_LABELS = {
     "selected": "选择了以下选项",
@@ -139,9 +139,6 @@ class AnswerRuleDialog(QDialog):
                 continue
             type_code = _normalize_question_type_code(item.get("type_code"))
             if type_code not in _ALLOWED_TYPE_CODES:
-                continue
-            # 量表题(type_code="5")中的评价题暂不支持规则配置
-            if type_code == "5" and item.get("is_rating"):
                 continue
             self._question_map[q_num] = item
 
@@ -582,7 +579,7 @@ class AnswerRulesPage(ScrollArea):
         layout.setSpacing(12)
 
         layout.addWidget(SubtitleLabel("作答规则", self.view))
-        layout.addWidget(BodyLabel("按条件控制后续单选/多选/量表/矩阵题答案。规则列表中越靠后优先级越高。", self.view))
+        layout.addWidget(BodyLabel("按条件控制后续单选/多选/量表/评价/矩阵题答案。规则列表中越靠后优先级越高。", self.view))
 
         btn_row = QHBoxLayout()
         self.add_btn = PrimaryPushButton("新增规则", self.view)
@@ -638,9 +635,9 @@ class AnswerRulesPage(ScrollArea):
 
     def _sanitize_rules(self, rules: List[Dict[str, Any]], show_removed_toast: bool = False) -> List[Dict[str, Any]]:
         sanitized, stats = sanitize_answer_rules(rules or [], self._questions_info or None)
-        if show_removed_toast and stats.get("dropdown", 0):
-            count = int(stats["dropdown"])
-            suffix = "已自动移除旧版下拉题规则" if count == 1 else f"已自动移除 {count} 条旧版下拉题规则"
+        if show_removed_toast and stats.get("unsupported", 0):
+            count = int(stats["unsupported"])
+            suffix = "已自动移除 1 条不再支持的作答规则" if count == 1 else f"已自动移除 {count} 条不再支持的作答规则"
             self._toast(suffix, "warning")
         return sanitized
 
@@ -666,15 +663,13 @@ class AnswerRulesPage(ScrollArea):
             type_code = _normalize_question_type_code(question.get("type_code"))
             if type_code not in _ALLOWED_TYPE_CODES:
                 continue
-            if type_code == "5" and question.get("is_rating"):
-                continue
             result.append(question)
         return result
 
     def _on_add_rule(self) -> None:
         selectable = self._get_selectable_questions()
         if len(selectable) < 2:
-            self._toast("当前问卷可用题目不足（需要至少2道单选/多选/量表/矩阵题）", "warning")
+            self._toast("当前问卷可用题目不足（需要至少2道单选/多选/量表/评价/矩阵题）", "warning")
             return
         dialog = AnswerRuleDialog(self._questions_info, parent=self.window() or self)
         if dialog.exec() != QDialog.DialogCode.Accepted:

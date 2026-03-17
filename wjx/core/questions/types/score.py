@@ -10,6 +10,7 @@ from wjx.core.questions.distribution import (
     record_pending_distribution_choice,
     resolve_distribution_probabilities,
 )
+from wjx.core.questions.consistency import apply_single_like_consistency
 from wjx.core.questions.tendency import get_tendency_index
 from wjx.core.questions.utils import normalize_droplist_probs
 
@@ -91,6 +92,7 @@ def score(
         return
     probabilities = score_prob_config[index] if index < len(score_prob_config) else -1
     probs = normalize_droplist_probs(probabilities, len(options))
+    probs = apply_single_like_consistency(probs, current)
     resolved_question_index = question_index if question_index is not None else current
     probs = resolve_distribution_probabilities(
         probs,

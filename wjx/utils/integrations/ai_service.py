@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """AI 服务模块 - 支持多种 AI API 调用"""
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Iterable
+from urllib.parse import urlsplit, urlunsplit
 import wjx.network.http_client as http_client
 
 # AI 服务提供商配置
@@ -38,6 +39,21 @@ AI_PROVIDERS = {
     },
 }
 
+CUSTOM_API_PROTOCOLS = {
+    "auto": {
+        "label": "自动识别（推荐）",
+        "description": "自动识别完整端点；只填 /v1 时自动尝试兼容协议",
+    },
+    "chat_completions": {
+        "label": "Chat Completions",
+        "description": "兼容 /chat/completions 协议",
+    },
+    "responses": {
+        "label": "Responses",
+        "description": "兼容 /responses 协议",
+    },
+}
+
 DEFAULT_SYSTEM_PROMPT = "你是一名有相关使用经验但并非专业人士的普通用户。填写问卷时更多是凭印象和实际体验作答。回答可以简短，也可以有些模糊，不需要追求严谨。"
 
 _DEFAULT_AI_SETTINGS: Dict[str, Any] = {
@@ -45,10 +61,15 @@ _DEFAULT_AI_SETTINGS: Dict[str, Any] = {
     "provider": "deepseek",
     "api_key": "",
     "base_url": "",
+    "api_protocol": "auto",
     "model": "",
     "system_prompt": DEFAULT_SYSTEM_PROMPT,
 }
 _RUNTIME_AI_SETTINGS: Optional[Dict[str, Any]] = None
+
+_CHAT_COMPLETIONS_SUFFIX = "/chat/completions"
+_RESPONSES_SUFFIX = "/responses"
+_LEGACY_COMPLETIONS_SUFFIX = "/completions"
 
 
 def _ensure_runtime_settings() -> Dict[str, Any]:
@@ -68,6 +89,7 @@ def save_ai_settings(
     provider: Optional[str] = None,
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
+    api_protocol: Optional[str] = None,
     model: Optional[str] = None,
     system_prompt: Optional[str] = None,
 ):
@@ -81,22 +103,135 @@ def save_ai_settings(
         settings["api_key"] = str(api_key)
     if base_url is not None:
         settings["base_url"] = str(base_url)
+    if api_protocol is not None:
+        settings["api_protocol"] = _normalize_custom_api_protocol(api_protocol)
     if model is not None:
         settings["model"] = str(model)
     if system_prompt is not None:
         settings["system_prompt"] = str(system_prompt)
 
 
-def _call_openai_compatible(
-    base_url: str,
+def _normalize_custom_api_protocol(value: Any) -> str:
+    protocol = str(value or "auto").strip().lower()
+    if protocol in CUSTOM_API_PROTOCOLS:
+        return protocol
+    return "auto"
+
+
+def _normalize_endpoint_url(raw_url: str) -> str:
+    return str(raw_url or "").strip().rstrip("/")
+
+
+def _path_endswith(path: str, suffix: str) -> bool:
+    normalized_path = (path or "").rstrip("/").lower()
+    return normalized_path.endswith(suffix)
+
+
+def _replace_path_suffix(parts, suffix: str) -> str:
+    normalized_path = (parts.path or "").rstrip("/")
+    return urlunsplit((parts.scheme, parts.netloc, normalized_path + suffix, parts.query, parts.fragment))
+
+
+def _resolve_custom_endpoint(base_url: str, api_protocol: str) -> tuple[str, str, bool]:
+    normalized_base_url = _normalize_endpoint_url(base_url)
+    if not normalized_base_url:
+        raise RuntimeError("自定义模式需要配置 Base URL")
+
+    parts = urlsplit(normalized_base_url)
+    path = parts.path or ""
+
+    if _path_endswith(path, _CHAT_COMPLETIONS_SUFFIX):
+        return "chat_completions", normalized_base_url, True
+    if _path_endswith(path, _RESPONSES_SUFFIX):
+        return "responses", normalized_base_url, True
+    if _path_endswith(path, _LEGACY_COMPLETIONS_SUFFIX):
+        raise RuntimeError("暂不支持旧版 /completions 协议，请改用 /chat/completions 或 /responses")
+
+    normalized_protocol = _normalize_custom_api_protocol(api_protocol)
+    if normalized_protocol == "responses":
+        return "responses", _replace_path_suffix(parts, _RESPONSES_SUFFIX), False
+    return "chat_completions", _replace_path_suffix(parts, _CHAT_COMPLETIONS_SUFFIX), False
+
+
+def _is_endpoint_mismatch_error(exc: Exception) -> bool:
+    message = str(exc or "").lower()
+    mismatch_markers = (
+        "404",
+        "405",
+        "410",
+        "not found",
+        "no route",
+        "no handler",
+        "unsupported path",
+        "invalid url",
+        "method not allowed",
+    )
+    return any(marker in message for marker in mismatch_markers)
+
+
+def _extract_text_parts(content: Any) -> Iterable[str]:
+    if isinstance(content, str):
+        text = content.strip()
+        if text:
+            yield text
+        return
+
+    if not isinstance(content, list):
+        return
+
+    for item in content:
+        if isinstance(item, str):
+            text = item.strip()
+            if text:
+                yield text
+            continue
+        if not isinstance(item, dict):
+            continue
+        item_type = str(item.get("type") or "").strip().lower()
+        text = str(item.get("text") or item.get("content") or "").strip()
+        if item_type in {"text", "output_text", "input_text"} and text:
+            yield text
+
+
+def _extract_chat_completion_text(data: Dict[str, Any]) -> str:
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise RuntimeError("API 返回中缺少 choices")
+
+    message = choices[0].get("message", {}) if isinstance(choices[0], dict) else {}
+    content = message.get("content")
+    parts = list(_extract_text_parts(content))
+    if parts:
+        return "\n".join(parts).strip()
+    raise RuntimeError("API 返回内容为空")
+
+
+def _extract_responses_text(data: Dict[str, Any]) -> str:
+    top_level_text = str(data.get("output_text") or "").strip()
+    if top_level_text:
+        return top_level_text
+
+    output = data.get("output")
+    if isinstance(output, list):
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            parts = list(_extract_text_parts(item.get("content")))
+            if parts:
+                return "\n".join(parts).strip()
+
+    raise RuntimeError("Responses API 返回内容为空")
+
+
+def _call_chat_completions(
+    url: str,
     api_key: str,
     model: str,
     question: str,
     system_prompt: str,
     timeout: int = 30,
 ) -> str:
-    """调用 OpenAI 兼容接口"""
-    url = f"{base_url.rstrip('/')}/chat/completions"
+    """调用 Chat Completions 兼容接口。"""
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
@@ -114,10 +249,36 @@ def _call_openai_compatible(
         resp = http_client.post(url, headers=headers, json=payload, timeout=timeout)
         resp.raise_for_status()
         data = resp.json()
-        content = data.get("choices", [{}])[0].get("message", {}).get("content")
-        if not content:
-            raise RuntimeError("API 返回内容为空")
-        return str(content).strip()
+        return _extract_chat_completion_text(data)
+    except Exception as e:
+        raise RuntimeError(f"API 调用失败: {e}")
+
+
+def _call_responses_api(
+    url: str,
+    api_key: str,
+    model: str,
+    question: str,
+    system_prompt: str,
+    timeout: int = 30,
+) -> str:
+    """调用 Responses 兼容接口。"""
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    payload = {
+        "model": model,
+        "instructions": system_prompt,
+        "input": f"请简短回答这个问卷问题：{question}",
+        "max_output_tokens": 200,
+        "temperature": 0.7,
+    }
+    try:
+        resp = http_client.post(url, headers=headers, json=payload, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        return _extract_responses_text(data)
     except Exception as e:
         raise RuntimeError(f"API 调用失败: {e}")
 
@@ -137,11 +298,22 @@ def generate_answer(question_title: str) -> str:
     # 确定 base_url 和 model
     if provider == "custom":
         base_url = config["base_url"]
+        api_protocol = _normalize_custom_api_protocol(config.get("api_protocol"))
         model = config["model"]
         if not base_url:
             raise RuntimeError("自定义模式需要配置 Base URL")
         if not model:
             raise RuntimeError("自定义模式需要配置模型名称")
+        resolved_protocol, request_url, has_explicit_endpoint = _resolve_custom_endpoint(base_url, api_protocol)
+        if resolved_protocol == "responses":
+            return _call_responses_api(request_url, api_key, model, question_title, system_prompt)
+        try:
+            return _call_chat_completions(request_url, api_key, model, question_title, system_prompt)
+        except Exception as exc:
+            if has_explicit_endpoint or api_protocol != "auto" or not _is_endpoint_mismatch_error(exc):
+                raise
+            fallback_url = f"{_normalize_endpoint_url(base_url)}{_RESPONSES_SUFFIX}"
+            return _call_responses_api(fallback_url, api_key, model, question_title, system_prompt)
     else:
         provider_config = AI_PROVIDERS.get(provider)
         if not provider_config:
@@ -151,7 +323,8 @@ def generate_answer(question_title: str) -> str:
         if provider == "siliconflow" and not model:
             raise RuntimeError("硅基流动需要先配置模型名称")
 
-    return _call_openai_compatible(base_url, api_key, model, question_title, system_prompt)
+    request_url = f"{_normalize_endpoint_url(base_url)}{_CHAT_COMPLETIONS_SUFFIX}"
+    return _call_chat_completions(request_url, api_key, model, question_title, system_prompt)
 
 
 def test_connection() -> str:
