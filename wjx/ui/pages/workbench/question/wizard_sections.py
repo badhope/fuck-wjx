@@ -454,11 +454,13 @@ class WizardSectionsMixin:
 
                     # AI和随机模式互斥
                     if ai_enabled:
+                        radios["list"].setEnabled(False)
                         radios["name"].setEnabled(False)
                         radios["mobile"].setEnabled(False)
                         if not radios["list"].isChecked():
                             radios["list"].setChecked(True)
                     else:
+                        radios["list"].setEnabled(True)
                         radios["name"].setEnabled(True)
                         radios["mobile"].setEnabled(True)
 
@@ -920,7 +922,18 @@ class WizardSectionsMixin:
     def _sync_text_section_state(self, idx: int) -> None:
         random_mode = self.text_random_mode_map.get(idx, _TEXT_RANDOM_NONE)
         ai_cb = self.ai_check_map.get(idx)
+        random_name_cb = self.text_random_name_check_map.get(idx)
+        random_mobile_cb = self.text_random_mobile_check_map.get(idx)
+
+        def _set_random_controls_enabled(enabled: bool, tooltip: str = "") -> None:
+            for cb in (random_name_cb, random_mobile_cb):
+                if cb is None:
+                    continue
+                cb.setEnabled(enabled)
+                cb.setToolTip(tooltip)
+
         if random_mode != _TEXT_RANDOM_NONE:
+            _set_random_controls_enabled(True)
             if ai_cb:
                 ai_cb.setToolTip("随机姓名/随机手机号与 AI 填空不能同时启用")
                 ai_cb.blockSignals(True)
@@ -932,8 +945,13 @@ class WizardSectionsMixin:
         if ai_cb:
             ai_cb.setToolTip("运行时每次填空都会调用 AI")
             ai_cb.setEnabled(True)
+            if ai_cb.isChecked():
+                _set_random_controls_enabled(False, "启用 AI 时，随机姓名和随机手机号不可用")
+            else:
+                _set_random_controls_enabled(True)
             self._set_text_answer_enabled(idx, not ai_cb.isChecked())
             return
+        _set_random_controls_enabled(True)
         self._set_text_answer_enabled(idx, True)
 
     def _on_text_random_mode_toggled(self, idx: int, mode: str, checked: bool) -> None:
@@ -970,14 +988,16 @@ class WizardSectionsMixin:
                 cb.blockSignals(False)
                 cb.setEnabled(False)
             self._set_text_answer_enabled(idx, False)
+            self._sync_text_section_state(idx)
             return
         if checked and not self._ensure_ai_checkbox_ready(self.ai_check_map.get(idx)):
             cb = self.ai_check_map.get(idx)
             if cb:
                 cb.setEnabled(True)
             self._set_text_answer_enabled(idx, True)
+            self._sync_text_section_state(idx)
             return
-        self._set_text_answer_enabled(idx, not checked)
+        self._sync_text_section_state(idx)
 
     def _ensure_ai_checkbox_ready(self, checkbox: Any) -> bool:
         if checkbox is None:
