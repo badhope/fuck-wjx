@@ -28,6 +28,10 @@ from wjx.ui.pages.workbench.runtime.cards import (
 from wjx.ui.widgets.setting_cards import SpinBoxSettingCard, SwitchSettingCard
 from wjx.utils.io.load_save import RuntimeConfig
 
+_PROXY_SOURCE_DEFAULT = "default"
+_PROXY_SOURCE_BENEFIT = "benefit"
+_PROXY_SOURCE_CUSTOM = "custom"
+
 
 class RuntimePage(ScrollArea):
     """独立的运行参数/开关页，方便在侧边栏查看。"""
@@ -43,6 +47,7 @@ class RuntimePage(ScrollArea):
         super().__init__(parent)
         self.controller = controller
         self._suppress_headless_tip = False
+        self._last_benefit_proxy_compatible = None
         self.view = QWidget(self)
         self.setWidget(self.view)
         self.setWidgetResizable(True)
@@ -159,7 +164,50 @@ class RuntimePage(ScrollArea):
         self.timed_card.switchButton.checkedChanged.connect(self._sync_timed_mode)
         self.timed_card.helpButton.clicked.connect(self._show_timed_mode_help)
         self.random_ip_card.proxyCombo.currentIndexChanged.connect(self._on_proxy_source_changed)
+        self.answer_card.valueChanged.connect(self._on_answer_duration_changed)
         self.reliability_card.switchButton.checkedChanged.connect(self._on_reliability_mode_toggled)
+
+    @staticmethod
+    def _normalize_proxy_source(source: str) -> str:
+        normalized = str(source or _PROXY_SOURCE_DEFAULT).strip().lower()
+        return normalized if normalized in {_PROXY_SOURCE_DEFAULT, _PROXY_SOURCE_BENEFIT, _PROXY_SOURCE_CUSTOM} else _PROXY_SOURCE_DEFAULT
+
+    def _get_selected_proxy_source(self) -> str:
+        idx = self.random_ip_card.proxyCombo.currentIndex()
+        source = str(self.random_ip_card.proxyCombo.itemData(idx)) if idx >= 0 else _PROXY_SOURCE_DEFAULT
+        return self._normalize_proxy_source(source)
+
+    def _current_proxy_required_minute(self) -> int:
+        try:
+            from wjx.network.proxy import get_proxy_minute_by_answer_seconds
+
+            _, answer_max = self.answer_card.getRange()
+            return int(get_proxy_minute_by_answer_seconds(answer_max))
+        except Exception as exc:
+            log_suppressed_exception("_current_proxy_required_minute", exc, level=logging.WARNING)
+            return 1
+
+    def _show_benefit_proxy_limit_tip(self, minute: int) -> None:
+        parent = self.window() or self.view
+        InfoBar.warning(
+            "",
+            f"当前作答时长会要求 {minute} 分钟代理，但“限时福利”只支持 1 分钟。请切回默认代理源，或缩短作答时长后再试。",
+            parent=parent,
+            position=InfoBarPosition.TOP,
+            duration=4500,
+        )
+
+    def _evaluate_benefit_proxy_compatibility(self, *, show_tip: bool) -> bool:
+        if self._get_selected_proxy_source() != _PROXY_SOURCE_BENEFIT:
+            self._last_benefit_proxy_compatible = None
+            return True
+        minute = self._current_proxy_required_minute()
+        compatible = minute <= 1
+        previous = self._last_benefit_proxy_compatible
+        self._last_benefit_proxy_compatible = compatible
+        if show_tip and (not compatible) and previous is not False:
+            self._show_benefit_proxy_limit_tip(minute)
+        return compatible
 
     def focus_answer_duration_setting(self):
         """跳转并聚焦到“作答时长”设置项。"""
@@ -286,18 +334,22 @@ class RuntimePage(ScrollArea):
 
     def _on_proxy_source_changed(self):
         """代理源选择变化时更新设置"""
-        idx = self.random_ip_card.proxyCombo.currentIndex()
-        source = str(self.random_ip_card.proxyCombo.itemData(idx)) if idx >= 0 else "default"
-        if not source or source == "None":
-            source = "default"
+        source = self._get_selected_proxy_source()
         try:
             from wjx.network.proxy import set_proxy_source, set_proxy_api_override
-            if source == "custom":
+
+            if source == _PROXY_SOURCE_CUSTOM:
                 api_url = self.random_ip_card.customApiEdit.text().strip()
                 set_proxy_api_override(api_url if api_url else None)
+            else:
+                set_proxy_api_override(None)
             set_proxy_source(source)
         except Exception as exc:
             log_suppressed_exception("_on_proxy_source_changed: from wjx.network.proxy import set_proxy_source, set_proxy_api_override", exc, level=logging.WARNING)
+        self._evaluate_benefit_proxy_compatibility(show_tip=(source == _PROXY_SOURCE_BENEFIT))
+
+    def _on_answer_duration_changed(self, _value: int):
+        self._evaluate_benefit_proxy_compatibility(show_tip=True)
 
     def _sync_random_ua(self, enabled: bool):
         try:
@@ -341,15 +393,12 @@ class RuntimePage(ScrollArea):
             log_suppressed_exception("update_config: reliability_card.get_alpha()", exc, level=logging.INFO)
         cfg.headless_mode = self.headless_card.switchButton.isChecked()
         try:
-            idx = self.random_ip_card.proxyCombo.currentIndex()
-            source = str(self.random_ip_card.proxyCombo.itemData(idx)) if idx >= 0 else "default"
-            if not source or source == "None":
-                source = "default"
+            source = self._get_selected_proxy_source()
             cfg.proxy_source = source
-            cfg.custom_proxy_api = self.random_ip_card.customApiEdit.text().strip() if source == "custom" else ""
+            cfg.custom_proxy_api = self.random_ip_card.customApiEdit.text().strip() if source == _PROXY_SOURCE_CUSTOM else ""
             cfg.proxy_area_code = self.random_ip_card.get_area_code()
         except Exception:
-            cfg.proxy_source = "default"
+            cfg.proxy_source = _PROXY_SOURCE_DEFAULT
             cfg.custom_proxy_api = ""
             cfg.proxy_area_code = None
         self.ai_section.update_config(cfg)
@@ -405,20 +454,25 @@ class RuntimePage(ScrollArea):
             self._suppress_headless_tip = False
 
         try:
-            proxy_source = getattr(cfg, "proxy_source", "default")
+            proxy_source = self._normalize_proxy_source(getattr(cfg, "proxy_source", _PROXY_SOURCE_DEFAULT))
             custom_api = getattr(cfg, "custom_proxy_api", "")
             idx = self.random_ip_card.proxyCombo.findData(proxy_source)
+            if idx < 0:
+                proxy_source = _PROXY_SOURCE_DEFAULT
+                idx = self.random_ip_card.proxyCombo.findData(proxy_source)
             if idx >= 0:
                 self.random_ip_card.proxyCombo.setCurrentIndex(idx)
             self.random_ip_card.customApiEdit.setText(custom_api)
-            self.random_ip_card.customApiRow.setVisible(proxy_source == "custom")
-            self.random_ip_card.proxyTrialLink.setVisible(proxy_source == "custom")
+            self.random_ip_card._on_source_changed()
             from wjx.network.proxy import set_proxy_source, set_proxy_api_override
-            if proxy_source == "custom" and custom_api:
+            if proxy_source == _PROXY_SOURCE_CUSTOM and custom_api:
                 set_proxy_api_override(custom_api)
+            else:
+                set_proxy_api_override(None)
             set_proxy_source(proxy_source)
             area_code = getattr(cfg, "proxy_area_code", None)
             self.random_ip_card.set_area_code(area_code)
+            self._evaluate_benefit_proxy_compatibility(show_tip=False)
         except Exception as exc:
             log_suppressed_exception("apply_config: proxy_source = getattr(cfg, \"proxy_source\", \"default\")", exc, level=logging.WARNING)
         self.ai_section.apply_config(cfg)

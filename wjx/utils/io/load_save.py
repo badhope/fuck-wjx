@@ -147,7 +147,7 @@ class RuntimeConfig:
     timed_mode_enabled: bool = False
     timed_mode_interval: float = 3.0
     random_ip_enabled: bool = False
-    proxy_source: str = "default"  # 代理源选择: "default" 或 "custom"
+    proxy_source: str = "default"  # 代理源选择: "default" / "benefit" / "custom"
     custom_proxy_api: str = ""  # 自定义代理API地址
     proxy_area_code: Optional[str] = None
     random_ua_enabled: bool = False
@@ -408,8 +408,8 @@ def _sanitize_runtime_config_payload(raw: Dict[str, Any]) -> RuntimeConfig:
     custom_proxy_api = str(raw.get("custom_proxy_api") or "").strip()
     if (not custom_proxy_api) and legacy_proxy_api:
         custom_proxy_api = legacy_proxy_api
-    proxy_source = str(raw.get("proxy_source") or "default")
-    if proxy_source not in ("default", "custom"):
+    proxy_source = str(raw.get("proxy_source") or "default").strip().lower()
+    if proxy_source not in ("default", "benefit", "custom"):
         proxy_source = "custom" if custom_proxy_api else "default"
     config.proxy_source = proxy_source
     config.custom_proxy_api = custom_proxy_api
@@ -580,7 +580,7 @@ def _migrate_v1_to_v2(payload: Dict[str, Any]) -> Dict[str, Any]:
     if (not custom_proxy_api) and legacy_proxy_api:
         custom_proxy_api = legacy_proxy_api
     proxy_source = str(migrated.get("proxy_source") or "").strip().lower()
-    if proxy_source not in ("default", "custom"):
+    if proxy_source not in ("default", "benefit", "custom"):
         proxy_source = "custom" if custom_proxy_api else "default"
     migrated["proxy_source"] = proxy_source
     migrated["custom_proxy_api"] = custom_proxy_api

@@ -31,7 +31,10 @@ from wjx.network.proxy.source import (
     get_proxy_area_code,
     get_proxy_occupy_minute,
     get_proxy_source,
-    is_custom_proxy_api_active,
+    get_proxy_upstream,
+    has_custom_proxy_api_override,
+    is_custom_proxy_source,
+    is_official_proxy_source,
 )
 
 # 从 pool.py 导入租约和代理池函数
@@ -288,6 +291,22 @@ def test_custom_proxy_api(url: str) -> tuple[bool, str, List[str]]:
 
 # ==================== 核心获取函数 ====================
 
+def _resolve_official_area_request_value(source: str, area_code: Optional[str]) -> str:
+    normalized_area = _normalize_area_code(area_code)
+    if not normalized_area:
+        return ""
+    try:
+        from wjx.core.services.area_service import resolve_proxy_area_for_source
+    except Exception:
+        return normalized_area
+    try:
+        resolved = resolve_proxy_area_for_source(source, normalized_area)
+    except Exception as exc:
+        log_suppressed_exception("random_ip._resolve_official_area_request_value", exc)
+        return normalized_area
+    return str(resolved or "").strip()
+
+
 def _fetch_new_proxy_batch(
     expected_count: int = 1,
     proxy_url: Optional[str] = None,
@@ -296,19 +315,24 @@ def _fetch_new_proxy_batch(
 ) -> List[ProxyLease]:
     expected_count = _normalize_expected_proxy_count(expected_count)
     current_source = get_proxy_source()
-    is_custom = current_source == PROXY_SOURCE_CUSTOM or is_custom_proxy_api_active()
+    is_custom = is_custom_proxy_source(current_source)
+    is_official = is_official_proxy_source(current_source)
 
     if is_custom:
-        if not is_custom_proxy_api_active():
+        if not has_custom_proxy_api_override():
             raise RuntimeError("自定义代理API地址未配置，请在设置中填写API地址")
         proxy_url = get_effective_proxy_api_url()
         logging.info(f"使用自定义代理API: {proxy_url}")
 
     area_code = get_proxy_area_code()
     has_area = bool(_normalize_area_code(area_code))
-    if current_source == PROXY_SOURCE_DEFAULT and not is_custom:
+    if is_official and not is_custom:
         minute = int(get_proxy_occupy_minute() or 1)
+        upstream = get_proxy_upstream(current_source)
+        if upstream != "default":
+            minute = 1
         pool = _resolve_default_pool_by_area(area_code) or PROXY_POOL_ORDINARY
+        area_value = _resolve_official_area_request_value(current_source, area_code)
         fetched: List[ProxyLease] = []
         errors: List[str] = []
         remaining = expected_count
@@ -317,14 +341,15 @@ def _fetch_new_proxy_batch(
                 payload = extract_proxy(
                     minute=minute,
                     pool=pool,
-                    area=_normalize_area_code(area_code) or "",
+                    area=area_value,
                     num=remaining,
+                    upstream=upstream,
                 )
                 if _is_default_batch_extract_payload(payload):
-                    batch_items = _build_default_proxy_leases_from_batch(payload)
+                    batch_items = _build_default_proxy_leases_from_batch(payload, source=current_source)
                     fetched.extend(batch_items)
                     break
-                lease = _build_default_proxy_lease(payload)
+                lease = _build_default_proxy_lease(payload, source=current_source)
                 if lease is not None:
                     fetched.append(lease)
                     logging.info("获取到代理: %s", _mask_proxy_for_log(lease.address))

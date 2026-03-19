@@ -24,6 +24,7 @@ from wjx.network.proxy.auth import (
 )
 from wjx.network.proxy import (
     get_effective_proxy_api_url,
+    get_proxy_minute_by_answer_seconds,
     is_custom_proxy_api_active,
     set_proxy_occupy_minute_by_answer_duration,
 )
@@ -41,6 +42,7 @@ if TYPE_CHECKING:
 
 NON_HEADLESS_FALLBACK_MAX_THREADS = 8
 DEVICE_QUOTA_LIMIT_MESSAGE = "当前设备已达到该问卷填写次数上限，无法继续"
+PROXY_SOURCE_BENEFIT = "benefit"
 
 
 class RunControllerRuntimeMixin:
@@ -58,6 +60,33 @@ class RunControllerRuntimeMixin:
         def parent(self) -> QObject: ...
 
     # -------------------- Run control --------------------
+    @staticmethod
+    def _normalize_proxy_source_value(source: Any) -> str:
+        normalized = str(source or "default").strip().lower()
+        return normalized if normalized in {"default", "benefit", "custom"} else "default"
+
+    @staticmethod
+    def _resolve_answer_duration_upper_bound(answer_duration: Any) -> int:
+        if isinstance(answer_duration, (list, tuple)):
+            if len(answer_duration) >= 2:
+                return max(0, int(answer_duration[1] or 0))
+            if len(answer_duration) >= 1:
+                return max(0, int(answer_duration[0] or 0))
+        return 0
+
+    def _validate_benefit_proxy_compatibility(self, config: RuntimeConfig) -> None:
+        if not bool(getattr(config, "random_ip_enabled", False)):
+            return
+        proxy_source = self._normalize_proxy_source_value(getattr(config, "proxy_source", "default"))
+        if proxy_source != PROXY_SOURCE_BENEFIT:
+            return
+        answer_max = self._resolve_answer_duration_upper_bound(getattr(config, "answer_duration", (0, 0)))
+        minute = int(get_proxy_minute_by_answer_seconds(answer_max))
+        if minute > 1:
+            raise RuntimeError(
+                f"当前作答时长会要求 {minute} 分钟代理，但“限时福利”只支持 1 分钟。请切回“默认”代理源，或缩短作答时长后再试。"
+            )
+
     def _create_adapter(self, stop_signal: threading.Event, *, random_ip_enabled: bool = False):
         adapter_cls = getattr(self, "_engine_adapter_cls", None)
         if adapter_cls is None:
@@ -162,6 +191,8 @@ class RunControllerRuntimeMixin:
         ctx.text_entry_types = copy.deepcopy(pending.text_entry_types)
         ctx.text_ai_flags = copy.deepcopy(pending.text_ai_flags)
         ctx.text_titles = copy.deepcopy(pending.text_titles)
+        ctx.multi_text_blank_modes = copy.deepcopy(pending.multi_text_blank_modes)
+        ctx.multi_text_blank_ai_flags = copy.deepcopy(pending.multi_text_blank_ai_flags)
         ctx.single_option_fill_texts = copy.deepcopy(pending.single_option_fill_texts)
         ctx.droplist_option_fill_texts = copy.deepcopy(pending.droplist_option_fill_texts)
         ctx.multiple_option_fill_texts = copy.deepcopy(pending.multiple_option_fill_texts)
@@ -312,6 +343,8 @@ class RunControllerRuntimeMixin:
 
         if _cancelled():
             return []
+
+        self._validate_benefit_proxy_compatibility(config)
 
         if not is_custom_proxy_api_active():
             if not has_authenticated_session() and not has_incomplete_session():

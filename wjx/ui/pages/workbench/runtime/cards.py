@@ -56,6 +56,9 @@ class SearchableComboBox(EditableComboBox):
 
 # 直辖市省级编码：这些地区用"市辖区"代替"全省/全市"
 _MUNICIPALITY_PROVINCE_CODES = {"110000", "120000", "310000", "500000"}
+_PROXY_SOURCE_DEFAULT = "default"
+_PROXY_SOURCE_BENEFIT = "benefit"
+_PROXY_SOURCE_CUSTOM = "custom"
 
 
 class RandomIPSettingCard(ExpandGroupSettingCard):
@@ -91,8 +94,9 @@ class RandomIPSettingCard(ExpandGroupSettingCard):
         source_row = QHBoxLayout()
         source_label = BodyLabel("代理源", self._groupContainer)
         self.proxyCombo = ComboBox(self._groupContainer)
-        self.proxyCombo.addItem("默认", userData="default")
-        self.proxyCombo.addItem("自定义", userData="custom")
+        self.proxyCombo.addItem("默认", userData=_PROXY_SOURCE_DEFAULT)
+        self.proxyCombo.addItem("限时福利", userData=_PROXY_SOURCE_BENEFIT)
+        self.proxyCombo.addItem("自定义", userData=_PROXY_SOURCE_CUSTOM)
         self.proxyCombo.setMinimumWidth(200)
         source_row.addWidget(source_label)
         source_row.addStretch(1)
@@ -119,6 +123,14 @@ class RandomIPSettingCard(ExpandGroupSettingCard):
         area_layout.addWidget(self.provinceCombo)
         area_layout.addWidget(self.cityCombo)
         layout.addWidget(self.areaRow)
+
+        self.benefitHintLabel = BodyLabel(
+            "限时福利仅支持 1 分钟代理，只能选择不限地区或具体城市。",
+            self._groupContainer,
+        )
+        self.benefitHintLabel.setStyleSheet("color: #D46B08; font-size: 12px;")
+        self.benefitHintLabel.hide()
+        layout.addWidget(self.benefitHintLabel)
 
         # 自定义API输入
         self.customApiRow = QWidget(self._groupContainer)
@@ -167,7 +179,8 @@ class RandomIPSettingCard(ExpandGroupSettingCard):
         self._supported_has_all = False
         self._cities_by_province = {}
         self._province_index_by_code = {}
-        self._load_area_options()
+        self._area_source = _PROXY_SOURCE_DEFAULT
+        self._load_area_options(_PROXY_SOURCE_DEFAULT)
         self.areaRow.setVisible(True)
         self.provinceCombo.currentIndexChanged.connect(self._on_province_changed)
         self.cityCombo.currentIndexChanged.connect(self._on_city_changed)
@@ -183,26 +196,62 @@ class RandomIPSettingCard(ExpandGroupSettingCard):
         self.switchButton.checkedChanged.connect(self._sync_ip_enabled)
         self._sync_ip_enabled(False)
 
-    def _on_source_changed(self):
+    def _get_selected_source(self) -> str:
         idx = self.proxyCombo.currentIndex()
-        source = str(self.proxyCombo.itemData(idx)) if idx >= 0 else "default"
-        self.customApiRow.setVisible(source == "custom")
-        self.proxyTrialLink.setVisible(source == "custom")
-        self.areaRow.setVisible(source == "default")
-        if source != "default":
+        source = str(self.proxyCombo.itemData(idx)) if idx >= 0 else _PROXY_SOURCE_DEFAULT
+        return source if source in {_PROXY_SOURCE_DEFAULT, _PROXY_SOURCE_BENEFIT, _PROXY_SOURCE_CUSTOM} else _PROXY_SOURCE_DEFAULT
+
+    @staticmethod
+    def _collect_area_codes(area_data: list) -> set[str]:
+        codes: set[str] = set()
+        for province in area_data:
+            if not isinstance(province, dict):
+                continue
+            province_code = str(province.get("code") or "")
+            if province_code:
+                codes.add(province_code)
+            for city in list(province.get("cities") or []):
+                if not isinstance(city, dict):
+                    continue
+                city_code = str(city.get("code") or "")
+                if city_code:
+                    codes.add(city_code)
+        return codes
+
+    def _on_source_changed(self):
+        source = self._get_selected_source()
+        current_area = self.get_area_code()
+        self.customApiRow.setVisible(source == _PROXY_SOURCE_CUSTOM)
+        self.proxyTrialLink.setVisible(source == _PROXY_SOURCE_CUSTOM)
+        self.benefitHintLabel.setVisible(source == _PROXY_SOURCE_BENEFIT)
+        self.areaRow.setVisible(source in {_PROXY_SOURCE_DEFAULT, _PROXY_SOURCE_BENEFIT})
+        if source == _PROXY_SOURCE_CUSTOM:
             self._apply_area_override(None)
         else:
-            self._apply_area_override(self.get_area_code())
+            self._load_area_options(source)
+            self.set_area_code(current_area)
         # 刷新布局 - 重新触发展开/收起来更新高度
         from PySide6.QtCore import QTimer
         QTimer.singleShot(0, self._refreshLayout)
 
-    def _load_area_options(self):
+    def _load_area_options(self, source: Optional[str] = None):
+        source = str(source or self._get_selected_source() or _PROXY_SOURCE_DEFAULT).strip().lower()
+        if source not in {_PROXY_SOURCE_DEFAULT, _PROXY_SOURCE_BENEFIT, _PROXY_SOURCE_CUSTOM}:
+            source = _PROXY_SOURCE_DEFAULT
+        self._area_source = source
         try:
-            from wjx.core.services.area_service import load_area_codes
-            from wjx.core.services.area_service import load_supported_area_codes
-            self._supported_area_codes, self._supported_has_all = load_supported_area_codes()
-            self._area_data = load_area_codes(supported_only=True)
+            if source == _PROXY_SOURCE_BENEFIT:
+                from wjx.core.services.area_service import load_benefit_supported_areas
+
+                self._area_data = load_benefit_supported_areas()
+                self._supported_area_codes = self._collect_area_codes(self._area_data)
+                self._supported_has_all = True
+            else:
+                from wjx.core.services.area_service import load_area_codes
+                from wjx.core.services.area_service import load_supported_area_codes
+
+                self._supported_area_codes, self._supported_has_all = load_supported_area_codes()
+                self._area_data = load_area_codes(supported_only=True)
             if not self._area_data:
                 logging.warning("地区数据加载为空，可能是数据文件损坏或格式错误")
         except Exception as e:
@@ -214,7 +263,7 @@ class RandomIPSettingCard(ExpandGroupSettingCard):
         self._province_index_by_code = {}
 
         self.provinceCombo.clear()
-        if self._supported_has_all or not self._supported_area_codes:
+        if source == _PROXY_SOURCE_BENEFIT or self._supported_has_all or not self._supported_area_codes:
             self.provinceCombo.addItem("不限制", userData="")
         for item in self._area_data:
             code = str(item.get("code") or "")
@@ -231,10 +280,13 @@ class RandomIPSettingCard(ExpandGroupSettingCard):
     def _populate_cities(self, province_code: str, preferred_city_code: Optional[str] = None) -> None:
         self.cityCombo.clear()
         is_municipality = province_code in _MUNICIPALITY_PROVINCE_CODES
+        is_benefit = self._area_source == _PROXY_SOURCE_BENEFIT
         # 直辖市不显示"全省/全市"，直接用"市辖区"代表全市
-        if not is_municipality and province_code and province_code in self._supported_area_codes:
+        if (not is_benefit) and not is_municipality and province_code and province_code in self._supported_area_codes:
             self.cityCombo.addItem("全省/全市", userData=province_code)
         cities = self._cities_by_province.get(province_code, [])
+        if is_benefit and cities:
+            self.cityCombo.addItem("请选择城市", userData="")
         for city in cities:
             code = str(city.get("code") or "")
             name = str(city.get("name") or "")
@@ -296,6 +348,7 @@ class RandomIPSettingCard(ExpandGroupSettingCard):
         if area_code is None:
             area_code = get_default_proxy_area_code()
         area_code = str(area_code or "").strip()
+        is_benefit = self._area_source == _PROXY_SOURCE_BENEFIT
         self._area_updating = True
         if not area_code:
             self.provinceCombo.setCurrentIndex(0)
@@ -305,6 +358,13 @@ class RandomIPSettingCard(ExpandGroupSettingCard):
             self._apply_area_override("")
             return
         province_code = f"{area_code[:2]}0000" if len(area_code) >= 2 else ""
+        if is_benefit and province_code == area_code:
+            self.provinceCombo.setCurrentIndex(0)
+            self.cityCombo.clear()
+            self.cityCombo.setEnabled(False)
+            self._area_updating = False
+            self._apply_area_override("")
+            return
         province_index = self._province_index_by_code.get(province_code)
         if province_index is None:
             self.provinceCombo.setCurrentIndex(0)
@@ -315,6 +375,13 @@ class RandomIPSettingCard(ExpandGroupSettingCard):
             return
         self.provinceCombo.setCurrentIndex(province_index)
         self._populate_cities(province_code, preferred_city_code=area_code)
+        if is_benefit and self.cityCombo.findData(area_code) < 0:
+            self.provinceCombo.setCurrentIndex(0)
+            self.cityCombo.clear()
+            self.cityCombo.setEnabled(False)
+            self._area_updating = False
+            self._apply_area_override("")
+            return
         self._area_updating = False
         self._apply_area_override(self.cityCombo.currentData())
 
@@ -395,7 +462,10 @@ class RandomIPSettingCard(ExpandGroupSettingCard):
         """API地址输入完成时同步到全局变量"""
         from wjx.network.proxy import set_proxy_api_override
         api_url = self.customApiEdit.text().strip()
-        set_proxy_api_override(api_url if api_url else None)
+        if self._get_selected_source() == _PROXY_SOURCE_CUSTOM:
+            set_proxy_api_override(api_url if api_url else None)
+        else:
+            set_proxy_api_override(None)
 
     def isChecked(self):
         return self.switchButton.isChecked()

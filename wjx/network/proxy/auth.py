@@ -661,6 +661,12 @@ def format_random_ip_error(exc: BaseException) -> str:
         return "地区参数不被后端接受，请更新客户端或检查地区配置"
     if detail == "invalid_area":
         return "指定地区无效，请重新选择地区后再试"
+    if detail == "invalid_upstream":
+        return "代理上游参数不被后端接受，请更新客户端"
+    if detail == "minute_not_supported_for_idiot":
+        return "限时福利代理源只支持 1 分钟代理，请切回默认代理源或缩短作答时长"
+    if detail == "invalid_area_for_idiot":
+        return "限时福利代理源的地区格式不正确，请重新选择具体城市后再试"
     if detail == "insufficient_quota":
         return "随机IP已用额度已达到上限，请先补充额度"
     if detail == "token_rate_limited":
@@ -742,7 +748,7 @@ def _log_extract_proxy_issue(
     elif error is not None:
         detail = str(error)
     logging.warning(
-        "%s attempt=%s status=%s detail=%s minute=%s pool=%s area=%s num=%s cf_ray=%s content_type=%s response=%s",
+        "%s attempt=%s status=%s detail=%s minute=%s pool=%s area=%s upstream=%s num=%s cf_ray=%s content_type=%s response=%s",
         message,
         int(attempt),
         status_code,
@@ -750,6 +756,7 @@ def _log_extract_proxy_issue(
         request_body.get("minute"),
         request_body.get("pool"),
         request_body.get("area", ""),
+        request_body.get("upstream", ""),
         request_body.get("num", 1),
         _response_header_value(response, "CF-RAY") if response is not None else "",
         _response_content_type(response) if response is not None else "",
@@ -967,13 +974,16 @@ def _parse_batch_extract_payload(
     }
 
 
-def extract_proxy(*, minute: int, pool: str, area: Optional[str], num: int = 1) -> Dict[str, Any]:
+def extract_proxy(*, minute: int, pool: str, area: Optional[str], num: int = 1, upstream: str = "default") -> Dict[str, Any]:
     session = _require_authenticated_session()
     body: Dict[str, Any] = {
         "user_id": int(session.user_id),
         "minute": int(minute),
         "pool": str(pool or "").strip(),
     }
+    upstream_value = str(upstream or "").strip().lower()
+    if upstream_value:
+        body["upstream"] = upstream_value
     request_num = max(1, int(num or 1))
     if request_num > 1:
         body["num"] = request_num

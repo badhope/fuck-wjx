@@ -17,6 +17,7 @@ from wjx.utils.logging.log_utils import log_suppressed_exception
 from wjx.network.proxy.source import (
     _to_non_negative_int,
     get_proxy_source,
+    is_official_proxy_source,
 )
 
 
@@ -49,7 +50,7 @@ def _mask_proxy_for_log(proxy_address: Optional[str]) -> str:
     text = str(proxy_address).strip()
     if not text:
         return ""
-    if get_proxy_source() != PROXY_SOURCE_DEFAULT:
+    if not is_official_proxy_source(get_proxy_source()):
         return text
     candidate = text if "://" in text else f"http://{text}"
     try:
@@ -159,7 +160,7 @@ def proxy_lease_has_sufficient_ttl(lease: Optional[ProxyLease], *, required_ttl_
 
 # ==================== 默认代理构建 ====================
 
-def _build_default_proxy_lease(payload: dict) -> Optional[ProxyLease]:
+def _build_default_proxy_lease(payload: dict, *, source: str = PROXY_SOURCE_DEFAULT) -> Optional[ProxyLease]:
     if not isinstance(payload, dict):
         return None
     host = str(payload.get("host") or "").strip()
@@ -174,10 +175,10 @@ def _build_default_proxy_lease(payload: dict) -> Optional[ProxyLease]:
     if not expire_at:
         logging.warning("默认随机IP响应缺少 expire_at，该代理仅允许立即使用，不会进入代理池")
         poolable = False
-    return _build_proxy_lease(raw, expire_at=expire_at, poolable=poolable, source=PROXY_SOURCE_DEFAULT)
+    return _build_proxy_lease(raw, expire_at=expire_at, poolable=poolable, source=source)
 
 
-def _build_default_proxy_leases_from_batch(payload: dict) -> List[ProxyLease]:
+def _build_default_proxy_leases_from_batch(payload: dict, *, source: str = PROXY_SOURCE_DEFAULT) -> List[ProxyLease]:
     if not isinstance(payload, dict):
         return []
     raw_items = payload.get("items")
@@ -187,7 +188,7 @@ def _build_default_proxy_leases_from_batch(payload: dict) -> List[ProxyLease]:
     for raw in raw_items:
         if not isinstance(raw, dict):
             continue
-        lease = _build_default_proxy_lease(raw)
+        lease = _build_default_proxy_lease(raw, source=source)
         if lease is None:
             continue
         leases.append(lease)
@@ -199,8 +200,8 @@ def _build_default_proxy_leases_from_batch(payload: dict) -> List[ProxyLease]:
 
 def _proxy_is_responsive(proxy_address: str, skip_for_default: bool = True) -> bool:
     masked_proxy = _mask_proxy_for_log(proxy_address)
-    if skip_for_default and get_proxy_source() == PROXY_SOURCE_DEFAULT:
-        logging.info(f"默认代理源，跳过健康检查: {masked_proxy}")
+    if skip_for_default and is_official_proxy_source(get_proxy_source()):
+        logging.info(f"官方代理源，跳过健康检查: {masked_proxy}")
         return True
     proxy_address = _normalize_proxy_address(proxy_address) or ""
     if not proxy_address:

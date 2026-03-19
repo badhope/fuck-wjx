@@ -1,5 +1,5 @@
 """单选题处理"""
-from typing import Any, List, Set
+from typing import Any, List, Optional, Set, Tuple
 import logging
 from wjx.utils.logging.log_utils import log_suppressed_exception
 
@@ -63,6 +63,20 @@ def _is_single_option_selected(driver: BrowserDriver, target_elem: Any) -> bool:
     except Exception as exc:
         log_suppressed_exception("single: _is_single_option_selected", exc, level=logging.ERROR)
         return False
+
+
+def _extract_single_option_text(element: Any) -> str:
+    if element is None:
+        return ""
+    try:
+        label_candidates = element.find_elements(By.CSS_SELECTOR, ".label, label")
+    except Exception:
+        label_candidates = []
+    for candidate in label_candidates:
+        text = extract_text_from_element(candidate).strip()
+        if text:
+            return text
+    return extract_text_from_element(element).strip()
 
 
 def _click_single_option(driver: BrowserDriver, current: int, selected_option: int, target_elem: Any) -> bool:
@@ -148,6 +162,124 @@ def _click_single_option(driver: BrowserDriver, current: int, selected_option: i
     return False
 
 
+def _extract_attached_select_options(target_elem: Any) -> Tuple[Optional[Any], List[Tuple[str, str]]]:
+    if target_elem is None:
+        return None, []
+    try:
+        select_elements = target_elem.find_elements(By.CSS_SELECTOR, "select")
+    except Exception as exc:
+        log_suppressed_exception("single: find attached selects", exc, level=logging.ERROR)
+        return None, []
+    for select_element in select_elements:
+        try:
+            option_elements = select_element.find_elements(By.CSS_SELECTOR, "option")
+        except Exception:
+            option_elements = []
+        valid_options: List[Tuple[str, str]] = []
+        for idx, opt in enumerate(option_elements):
+            try:
+                value = (opt.get_attribute("value") or "").strip()
+            except Exception:
+                value = ""
+            try:
+                text = (opt.text or "").strip()
+            except Exception:
+                text = ""
+            if idx == 0 and ((value == "") or (value == "0") or ("请选择" in text)):
+                continue
+            if not text and not value:
+                continue
+            valid_options.append((value, text or value))
+        if valid_options:
+            return select_element, valid_options
+    return None, []
+
+
+def _select_attached_option_via_js(driver: BrowserDriver, select_element: Any, option_value: str, display_text: str) -> bool:
+    try:
+        applied = driver.execute_script(
+            """
+const select = arguments[0];
+const optionValue = arguments[1];
+const displayText = arguments[2];
+if (!select) return false;
+const options = Array.from(select.options || []);
+const target = options.find(opt => String(opt.value || '') === String(optionValue || ''));
+if (!target) return false;
+target.selected = true;
+select.value = target.value;
+try { select.setAttribute('value', target.value); } catch (e) {}
+['input', 'change'].forEach(name => {
+    try { select.dispatchEvent(new Event(name, { bubbles: true })); } catch (e) {}
+});
+const container = select.parentElement || select.closest('.ui-select') || select.closest('.ui-text');
+const rendered = container
+    ? container.querySelector('.select2-selection__rendered, [role="textbox"], .select2-selection__placeholder')
+    : null;
+const resolvedText = displayText || target.textContent || target.innerText || '';
+if (rendered) {
+    rendered.textContent = resolvedText;
+    try { rendered.setAttribute('title', resolvedText); } catch (e) {}
+}
+const hiddenInput = container
+    ? container.querySelector('input.OtherRadioText, input.cusomSelect, input[type="text"], input[type="search"]')
+    : null;
+if (hiddenInput) {
+    hiddenInput.value = resolvedText;
+    try { hiddenInput.setAttribute('value', resolvedText); } catch (e) {}
+    ['input', 'change'].forEach(name => {
+        try { hiddenInput.dispatchEvent(new Event(name, { bubbles: true })); } catch (e) {}
+    });
+}
+return String(select.value || '') === String(target.value || '');
+            """,
+            select_element,
+            option_value or "",
+            display_text or "",
+        )
+    except Exception as exc:
+        log_suppressed_exception("single: select attached option via js", exc, level=logging.ERROR)
+        applied = False
+    return bool(applied)
+
+
+def _handle_attached_select(
+    driver: BrowserDriver,
+    current: int,
+    selected_option_index_zero_based: int,
+    target_elem: Any,
+    fill_value: Optional[str],
+) -> Optional[str]:
+    select_element, select_options = _extract_attached_select_options(target_elem)
+    if not select_element or not select_options:
+        return None
+    matched_idx: Optional[int] = None
+    normalized_fill = str(fill_value or "").strip()
+    if normalized_fill:
+        lowered_fill = normalized_fill.casefold()
+        for idx, (value, text) in enumerate(select_options):
+            if lowered_fill in {str(value or "").strip().casefold(), str(text or "").strip().casefold()}:
+                matched_idx = idx
+                break
+    if matched_idx is None:
+        matched_idx = weighted_index([1.0] * len(select_options))
+    option_value, option_text = select_options[matched_idx]
+    if _select_attached_option_via_js(driver, select_element, option_value, option_text):
+        logging.info(
+            "单选题第%s题第%s项命中联动下拉，已自动选择：%s",
+            current,
+            selected_option_index_zero_based + 1,
+            option_text or option_value or "未知选项",
+        )
+        return option_text or option_value or None
+    logging.warning(
+        "单选题第%s题第%s项的联动下拉选择失败，页面可能仍会判定未作答。",
+        current,
+        selected_option_index_zero_based + 1,
+    )
+    return None
+
+
 def single(driver: BrowserDriver, current: int, index: int, single_prob_config: List, single_option_fill_texts_config: List) -> None:
     """单选题处理主函数"""
     # 兼容不同模板下的单选题 DOM 结构，按优先级收集“真实选项”节点
@@ -215,7 +347,7 @@ def single(driver: BrowserDriver, current: int, index: int, single_prob_config: 
     # 画像约束：提取选项文本，对匹配画像的选项加权
     option_texts = []
     for elem in option_elements:
-        option_texts.append(extract_text_from_element(elem))
+        option_texts.append(_extract_single_option_text(elem))
     probabilities = apply_persona_boost(option_texts, probabilities)
     probabilities = apply_single_like_consistency(probabilities, current)
     target_index = weighted_index(probabilities)
@@ -229,13 +361,17 @@ def single(driver: BrowserDriver, current: int, index: int, single_prob_config: 
         logging.warning("单选题点击未生效（题号%s，索引%s），已跳过。", current, selected_option)
         return
 
+    fill_entries = single_option_fill_texts_config[index] if index < len(single_option_fill_texts_config) else None
+    fill_value = get_fill_text_from_config(fill_entries, selected_option - 1)
+    attached_select_text = _handle_attached_select(driver, current, selected_option - 1, target_elem, fill_value)
+
     # 记录统计数据
 
     # 记录作答上下文（供后续题目参考）
     selected_text = option_texts[target_index] if target_index < len(option_texts) else ""
+    if attached_select_text:
+        selected_text = f"{selected_text} / {attached_select_text}" if selected_text else attached_select_text
     record_answer(current, "single", selected_indices=[target_index], selected_texts=[selected_text])
 
-    fill_entries = single_option_fill_texts_config[index] if index < len(single_option_fill_texts_config) else None
-    fill_value = get_fill_text_from_config(fill_entries, selected_option - 1)
     fill_option_additional_text(driver, current, selected_option - 1, fill_value)
 

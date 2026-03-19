@@ -8,10 +8,17 @@ from wjx.utils.app.config import (
     PROXY_MINUTE_OPTIONS,
     PROXY_POOL_ORDINARY,
     PROXY_POOL_QUALITY,
+    PROXY_SOURCE_CUSTOM,
     PROXY_QUOTA_COST_MAP,
     PROXY_SOURCE_DEFAULT,
     PROXY_TTL_GRACE_SECONDS,
 )
+
+PROXY_SOURCE_BENEFIT = "benefit"
+PROXY_UPSTREAM_DEFAULT = "default"
+PROXY_UPSTREAM_BENEFIT = "idiot"
+_SUPPORTED_PROXY_SOURCES = frozenset({PROXY_SOURCE_DEFAULT, PROXY_SOURCE_BENEFIT, PROXY_SOURCE_CUSTOM})
+_OFFICIAL_PROXY_SOURCES = frozenset({PROXY_SOURCE_DEFAULT, PROXY_SOURCE_BENEFIT})
 
 _config_lock = threading.Lock()
 _proxy_api_url_override: Optional[str] = None
@@ -29,16 +36,52 @@ _ORDINARY_POOL_PROVINCE_CODES: Set[str] = {
 
 # ==================== 代理源 get/set ====================
 
+def normalize_proxy_source(source: Optional[str]) -> str:
+    try:
+        cleaned = str(source or "").strip().lower()
+    except Exception:
+        cleaned = ""
+    if cleaned in _SUPPORTED_PROXY_SOURCES:
+        return cleaned
+    return PROXY_SOURCE_DEFAULT
+
+
 def set_proxy_source(source: str) -> None:
     global _current_proxy_source
+    normalized = normalize_proxy_source(source)
     with _config_lock:
-        _current_proxy_source = source
-    logging.info(f"代理源已切换为: {source}")
+        _current_proxy_source = normalized
+    logging.info(f"代理源已切换为: {normalized}")
 
 
 def get_proxy_source() -> str:
     with _config_lock:
-        return _current_proxy_source
+        return normalize_proxy_source(_current_proxy_source)
+
+
+def is_custom_proxy_source(source: Optional[str] = None) -> bool:
+    current = get_proxy_source() if source is None else normalize_proxy_source(source)
+    return current == PROXY_SOURCE_CUSTOM
+
+
+def is_official_proxy_source(source: Optional[str] = None) -> bool:
+    current = get_proxy_source() if source is None else normalize_proxy_source(source)
+    return current in _OFFICIAL_PROXY_SOURCES
+
+
+def source_supports_quota_session(source: Optional[str] = None) -> bool:
+    return is_official_proxy_source(source)
+
+
+def source_uses_custom_api_override(source: Optional[str] = None) -> bool:
+    return is_custom_proxy_source(source)
+
+
+def get_proxy_upstream(source: Optional[str] = None) -> str:
+    current = get_proxy_source() if source is None else normalize_proxy_source(source)
+    if current == PROXY_SOURCE_BENEFIT:
+        return PROXY_UPSTREAM_BENEFIT
+    return PROXY_UPSTREAM_DEFAULT
 
 
 # ==================== 代理占用时长 ====================
@@ -150,16 +193,23 @@ def get_default_proxy_area_code() -> str:
 def get_effective_proxy_api_url() -> str:
     with _config_lock:
         override = (_proxy_api_url_override or "").strip()
-    return override or IP_EXTRACT_ENDPOINT
+        source = normalize_proxy_source(_current_proxy_source)
+    if source_uses_custom_api_override(source):
+        return override
+    return IP_EXTRACT_ENDPOINT
+
+
+def get_custom_proxy_api_override() -> str:
+    with _config_lock:
+        return (_proxy_api_url_override or "").strip()
+
+
+def has_custom_proxy_api_override() -> bool:
+    return bool(get_custom_proxy_api_override())
 
 
 def is_custom_proxy_api_active() -> bool:
-    with _config_lock:
-        source = _current_proxy_source
-        override = (_proxy_api_url_override or "").strip()
-    if source != PROXY_SOURCE_DEFAULT:
-        return True
-    return bool(override)
+    return is_custom_proxy_source()
 
 
 def get_proxy_area_code() -> Optional[str]:

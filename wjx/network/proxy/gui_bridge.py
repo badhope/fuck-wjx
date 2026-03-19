@@ -158,9 +158,9 @@ def confirm_random_ip_usage(gui: Any) -> bool:
 
 def _build_counter_snapshot() -> tuple[int, int]:
     global _counter_refresh_cache
-    from wjx.network.proxy.source import is_custom_proxy_api_active
+    from wjx.network.proxy.source import is_custom_proxy_source
 
-    if not is_custom_proxy_api_active() and (has_authenticated_session() or has_incomplete_session()):
+    if not is_custom_proxy_source() and (has_authenticated_session() or has_incomplete_session()):
         now = time.monotonic()
         cached = _counter_refresh_cache
         if cached and (now - cached[2]) < _COUNTER_REFRESH_TTL_SECONDS:
@@ -192,14 +192,14 @@ def _build_counter_snapshot() -> tuple[int, int]:
 
 def on_random_ip_toggle(gui: Any) -> None:
     global _counter_refresh_cache
-    from wjx.network.proxy.source import is_custom_proxy_api_active
+    from wjx.network.proxy.source import is_custom_proxy_source
 
     if gui is None:
         return
     enabled = bool(gui.is_random_ip_enabled())
     if not enabled:
         return
-    if is_custom_proxy_api_active():
+    if is_custom_proxy_source():
         if confirm_random_ip_usage(gui):
             return
         _set_random_ip_enabled(gui, False)
@@ -312,14 +312,14 @@ def _invoke_quota_request_form(gui: Any) -> bool:
 
 
 def refresh_ip_counter_display(gui: Any) -> None:
-    from wjx.network.proxy.source import is_custom_proxy_api_active
+    from wjx.network.proxy.source import is_custom_proxy_source
 
     load_session_for_startup()
     if gui is None:
         return
 
     def _compute_and_update():
-        custom_api = is_custom_proxy_api_active()
+        custom_api = is_custom_proxy_source()
         try:
             count, limit = _build_counter_snapshot()
         except RandomIPAuthError as exc:
@@ -341,9 +341,9 @@ def refresh_ip_counter_display(gui: Any) -> None:
 
 
 def handle_random_ip_submission(gui: Any, stop_signal: Optional[threading.Event]) -> None:
-    from wjx.network.proxy.source import is_custom_proxy_api_active
+    from wjx.network.proxy.source import is_custom_proxy_source
 
-    if gui is None or is_custom_proxy_api_active():
+    if gui is None or is_custom_proxy_source():
         return
     try:
         snapshot = get_session_snapshot()

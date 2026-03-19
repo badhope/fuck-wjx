@@ -1,5 +1,5 @@
 """填空题/多项填空题处理"""
-from typing import Any, List, Optional, Set
+from typing import Any, List, Optional, Set, Tuple
 import logging
 from wjx.utils.logging.log_utils import log_suppressed_exception
 
@@ -20,7 +20,10 @@ MULTI_TEXT_DELIMITER = "||"
 
 
 def _preview_text_answer(value: Optional[Any], limit: int = 80) -> str:
-    text = "" if value is None else str(value).strip()
+    if isinstance(value, (list, tuple)):
+        text = " | ".join((str(item or "").strip() or DEFAULT_FILL_TEXT) for item in value)
+    else:
+        text = "" if value is None else str(value).strip()
     if not text:
         return DEFAULT_FILL_TEXT
     compact = " ".join(text.split())
@@ -33,6 +36,21 @@ def _log_text_answer(current: int, title: str, source: str, selected_answer: Opt
     title_text = str(title or "").strip() or f"第{current}题"
     preview = _preview_text_answer(selected_answer)
     logging.info("第%d题填空已作答：来源=%s 标题=%s 答案=%s", current, source, title_text, preview)
+
+
+def _summarize_multi_text_sources(sources: Optional[List[str]]) -> str:
+    if not sources:
+        return "配置"
+    ordered_sources: List[str] = []
+    for raw in sources:
+        source = str(raw or "").strip() or "配置"
+        if source not in ordered_sources:
+            ordered_sources.append(source)
+    if not ordered_sources:
+        return "配置"
+    if len(ordered_sources) == 1:
+        return ordered_sources[0]
+    return f"混合({'/'.join(ordered_sources)})"
 
 
 def fill_text_question_input(driver: BrowserDriver, element, value: Optional[Any]) -> None:
@@ -396,12 +414,9 @@ def text(
             )
         except AIRuntimeError as exc:
             raise AIRuntimeError(f"第{current}题 AI 生成失败：{exc}") from exc
-        _handle_multi_text(driver, current, selected_answer)
-        _log_text_answer(current, title or fallback_title, "AI", selected_answer)
-        if isinstance(selected_answer, list):
-            record_text_answer = " | ".join(selected_answer)
-        else:
-            record_text_answer = str(selected_answer or "").strip()
+        applied_values, applied_sources = _handle_multi_text(driver, current, selected_answer, default_source="AI")
+        _log_text_answer(current, title or fallback_title, _summarize_multi_text_sources(applied_sources), applied_values)
+        record_text_answer = " | ".join(applied_values)
         record_answer(current, "text", text_answer=record_text_answer)
         return
 
@@ -416,9 +431,17 @@ def text(
         if multi_text_blank_ai_flags and index < len(multi_text_blank_ai_flags):
             blank_ai_flags = multi_text_blank_ai_flags[index]
         title = resolve_question_title_for_ai(driver, current, fallback_title) if blank_ai_flags and any(blank_ai_flags) else ""
-        _handle_multi_text(driver, current, selected_answer, blank_modes, blank_ai_flags, title)
-        _log_text_answer(current, title or fallback_title, "配置", selected_answer)
-        record_answer(current, "text", text_answer=selected_answer)
+        applied_values, applied_sources = _handle_multi_text(
+            driver,
+            current,
+            selected_answer,
+            blank_modes,
+            blank_ai_flags,
+            title,
+            default_source="配置",
+        )
+        _log_text_answer(current, title or fallback_title, _summarize_multi_text_sources(applied_sources), applied_values)
+        record_answer(current, "text", text_answer=" | ".join(applied_values))
         return
 
     _handle_single_text(driver, current, selected_answer)
@@ -427,7 +450,15 @@ def text(
     record_answer(current, "text", text_answer=selected_answer)
 
 
-def _handle_multi_text(driver: BrowserDriver, current: int, selected_answer: Any, blank_modes: Optional[List[str]] = None, blank_ai_flags: Optional[List[bool]] = None, title: str = "") -> None:
+def _handle_multi_text(
+    driver: BrowserDriver,
+    current: int,
+    selected_answer: Any,
+    blank_modes: Optional[List[str]] = None,
+    blank_ai_flags: Optional[List[bool]] = None,
+    title: str = "",
+    default_source: str = "配置",
+) -> Tuple[List[str], List[str]]:
     """处理多项填空题"""
     if isinstance(selected_answer, list):
         parts = [str(part or "").strip() for part in selected_answer]
@@ -443,12 +474,14 @@ def _handle_multi_text(driver: BrowserDriver, current: int, selected_answer: Any
 
     if not values or all(not v for v in values):
         values = [DEFAULT_FILL_TEXT]
+    value_sources = [default_source] * len(values)
 
     # 处理每个填空项的随机模式和AI
     if blank_modes or blank_ai_flags:
         max_len = max(len(blank_modes) if blank_modes else 0, len(blank_ai_flags) if blank_ai_flags else 0)
         while len(values) < max_len:
             values.append(DEFAULT_FILL_TEXT)
+            value_sources.append(default_source)
 
         for idx in range(min(len(values), max_len)):
             # AI优先
@@ -463,15 +496,19 @@ def _handle_multi_text(driver: BrowserDriver, current: int, selected_answer: Any
                         values[idx] = str(ai_text[0]).strip() if ai_text else DEFAULT_FILL_TEXT
                     else:
                         values[idx] = str(ai_text or "").strip() or DEFAULT_FILL_TEXT
+                    value_sources[idx] = "AI"
                 except AIRuntimeError:
                     values[idx] = DEFAULT_FILL_TEXT
+                    value_sources[idx] = "AI失败兜底"
             # 随机模式
             elif blank_modes and idx < len(blank_modes):
                 mode = blank_modes[idx]
                 if mode == "name":
                     values[idx] = resolve_dynamic_text_token("__RANDOM_NAME__")
+                    value_sources[idx] = "随机姓名"
                 elif mode == "mobile":
                     values[idx] = resolve_dynamic_text_token("__RANDOM_MOBILE__")
+                    value_sources[idx] = "随机手机号"
 
     primary_inputs: List[Any] = []
     secondary_inputs: List[Any] = []
@@ -557,6 +594,7 @@ def _handle_multi_text(driver: BrowserDriver, current: int, selected_answer: Any
     fill_values = [v if v else DEFAULT_FILL_TEXT for v in values] or [DEFAULT_FILL_TEXT]
     while len(fill_values) < visible_count:
         fill_values.append(DEFAULT_FILL_TEXT)
+        value_sources.append(default_source)
 
     def _resolve_value_for_index(idx: int) -> str:
         if idx < visible_count:
@@ -631,6 +669,17 @@ def _handle_multi_text(driver: BrowserDriver, current: int, selected_answer: Any
         )
     except Exception as exc:
         log_suppressed_exception("_handle_multi_text: driver.execute_script( \"\"\" return (function() { const qid = arguments[0]; con...", exc, level=logging.ERROR)
+    applied_count = visible_count if visible_count > 0 else len(fill_values)
+    applied_values = [_resolve_value_for_index(idx) for idx in range(applied_count)]
+    applied_sources: List[str] = []
+    for idx in range(applied_count):
+        if idx < len(value_sources):
+            applied_sources.append(value_sources[idx])
+        elif value_sources:
+            applied_sources.append(value_sources[-1])
+        else:
+            applied_sources.append(default_source)
+    return applied_values, applied_sources
 
 
 def _handle_single_text(driver: BrowserDriver, current: int, selected_answer: str) -> None:

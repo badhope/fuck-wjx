@@ -247,6 +247,7 @@ PROXY_QUOTA_COST_MAP = {
 }
 # 代理源常量
 PROXY_SOURCE_DEFAULT = "default"
+PROXY_SOURCE_BENEFIT = "benefit"
 PROXY_SOURCE_CUSTOM = "custom"
 # 默认代理池类型
 PROXY_POOL_ORDINARY = "ordinary"

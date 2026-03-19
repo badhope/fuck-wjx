@@ -392,6 +392,66 @@ def _collect_choice_option_texts(question_div) -> Tuple[List[str], List[int]]:
     return texts, fillable_indices
 
 
+def _extract_select_option_texts_from_element(select_element) -> List[str]:
+    if select_element is None:
+        return []
+    options: List[str] = []
+    try:
+        option_elements = select_element.find_all("option")
+    except Exception:
+        option_elements = []
+    for idx, option in enumerate(option_elements):
+        value = _normalize_html_text(option.get("value") or "")
+        text = _normalize_html_text(option.get_text(" ", strip=True))
+        if idx == 0 and ((value == "") or (value == "0") or ("请选择" in text)):
+            continue
+        if not text:
+            continue
+        options.append(text)
+    return options
+
+
+def _extract_choice_attached_selects(question_div) -> List[Dict[str, Any]]:
+    if question_div is None:
+        return []
+    option_elements: List[Any] = []
+    for selector in ('.ui-controlgroup > div', 'ul > li'):
+        try:
+            option_elements = question_div.select(selector)
+        except Exception:
+            option_elements = []
+        if option_elements:
+            break
+    attached_selects: List[Dict[str, Any]] = []
+    for option_index, element in enumerate(option_elements):
+        try:
+            select_element = element.find("select")
+        except Exception:
+            select_element = None
+        if select_element is None:
+            continue
+        option_text = ""
+        try:
+            label_element = element.select_one(".label")
+        except Exception:
+            label_element = None
+        if label_element is not None:
+            try:
+                option_text = _normalize_html_text(label_element.get_text(" ", strip=True))
+            except Exception:
+                option_text = ""
+        if not option_text:
+            option_text = _extract_option_text_from_attrs(element)
+        select_options = _extract_select_option_texts_from_element(select_element)
+        attached_selects.append({
+            "option_index": option_index,
+            "option_text": option_text,
+            "select_options": select_options,
+            "select_option_count": len(select_options),
+        })
+    return attached_selects
+
+
 def _verify_text_indicates_location(value: Optional[str]) -> bool:
     if not value:
         return False
@@ -1169,6 +1229,9 @@ def parse_survey_questions_from_html(html: str) -> List[Dict[str, Any]]:
                 if scale_texts:
                     option_texts = scale_texts
                     option_count = len(scale_texts)
+            attached_option_selects: List[Dict[str, Any]] = []
+            if type_code in {"3", "4"}:
+                attached_option_selects = _extract_choice_attached_selects(question_div)
             has_jump, jump_rules = _extract_jump_rules_from_html(question_div, question_number, option_texts)
             slider_min, slider_max, slider_step = (None, None, None)
             if type_code == "8":
@@ -1198,6 +1261,8 @@ def parse_survey_questions_from_html(html: str) -> List[Dict[str, Any]]:
                 "forced_option_index": forced_option_index,
                 "forced_option_text": forced_option_text,
                 "fillable_options": fillable_indices,
+                "attached_option_selects": attached_option_selects,
+                "has_attached_option_select": bool(attached_option_selects),
                 "is_location": is_location,
                 "is_rating": is_rating,
                 "is_description": is_description,

@@ -336,6 +336,28 @@ class QuestionWizardDialog(WizardSectionsMixin, QDialog):
             _apply_label_color(desc, "#555555", "#c8c8c8")
             card_layout.addWidget(desc)
 
+        attached_option_selects: List[Dict[str, Any]] = []
+        if idx < len(self.info):
+            raw_attached_selects = self.info[idx].get("attached_option_selects")
+            if isinstance(raw_attached_selects, list):
+                attached_option_selects = [item for item in raw_attached_selects if isinstance(item, dict)]
+        if attached_option_selects:
+            hint_parts: List[str] = []
+            for item in attached_option_selects:
+                option_text = str(item.get("option_text") or "").strip() or f"第{int(item.get('option_index', 0)) + 1}项"
+                option_count = int(item.get("select_option_count") or 0)
+                hint_parts.append(f"{option_text} 后面还有 {option_count} 个下拉选项")
+            attached_hint = BodyLabel(
+                "联动提示：这题不是普通单选，"
+                + "；".join(hint_parts)
+                + "。运行时如果选中这些项，会自动补选下面的下拉。",
+                card,
+            )
+            attached_hint.setWordWrap(True)
+            attached_hint.setStyleSheet("font-size: 12px; padding: 4px 0;")
+            _apply_label_color(attached_hint, "#0f6cbd", "#63b3ff")
+            card_layout.addWidget(attached_hint)
+
         # 跳题逻辑风险提示
         if has_jump:
             jump_warn = BodyLabel(
